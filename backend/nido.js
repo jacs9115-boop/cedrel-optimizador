@@ -1,10 +1,14 @@
-// Algoritmo de empaquetado tipo "estantes" (shelf / guillotina), que respeta
-// la direccion de la veta de cada pieza. Se elige este metodo porque produce
-// cortes de guillotina (de lado a lado), que es como realmente cortan las
-// seccionadoras de tableros.
+// Algoritmo de empaquetado tipo "guillotina con rectangulos libres" (variante
+// del metodo descrito por Jukka Jylanki en "A Thousand Ways to Pack the
+// Bin"). Cada lamina mantiene una lista de espacios libres; para cada pieza
+// se busca, entre TODAS las laminas ya abiertas, el espacio libre donde
+// mejor encaja (Best Short Side Fit: se minimiza el lado sobrante mas chico
+// entre el hueco y la pieza), y luego ese hueco se divide en hasta 2 huecos
+// nuevos con un corte de lado a lado (de guillotina), que es como cortan
+// realmente las seccionadoras de tableros.
 //
 // Si la pieza no tiene veta (veta === "no"), se prueban las dos orientaciones
-// posibles y se elige la que mejor aproveche la lamina en cada momento.
+// posibles en cada hueco y se elige la que mejor encaje.
 
 function orientacionesPosibles_(p) {
   if (p.veta === "no") {
@@ -15,6 +19,60 @@ function orientacionesPosibles_(p) {
   }
   const vetaCorto = p.veta === "corto";
   return [{ dx: vetaCorto ? p.ancho : p.largo, dy: vetaCorto ? p.largo : p.ancho }];
+}
+
+// Divide el rectangulo libre "libre" en hasta 2 rectangulos libres nuevos,
+// despues de colocar una pieza de pw x ph en su esquina superior izquierda
+// (x,y). Se elige el eje de corte que deja el rectangulo sobrante mas grande
+// completo (heuristica "shorter leftover axis"), para minimizar la
+// fragmentacion del espacio que va quedando.
+function dividirLibre_(libre, pw, ph) {
+  const sobranteX = libre.w - pw;
+  const sobranteY = libre.h - ph;
+  const resultado = [];
+  if (sobranteX > 0 && sobranteY > 0) {
+    if (sobranteX < sobranteY) {
+      resultado.push({ x: libre.x + pw, y: libre.y, w: sobranteX, h: libre.h });
+      resultado.push({ x: libre.x, y: libre.y + ph, w: pw, h: sobranteY });
+    } else {
+      resultado.push({ x: libre.x, y: libre.y + ph, w: libre.w, h: sobranteY });
+      resultado.push({ x: libre.x + pw, y: libre.y, w: sobranteX, h: ph });
+    }
+  } else if (sobranteX > 0) {
+    resultado.push({ x: libre.x + pw, y: libre.y, w: sobranteX, h: libre.h });
+  } else if (sobranteY > 0) {
+    resultado.push({ x: libre.x, y: libre.y + ph, w: libre.w, h: sobranteY });
+  }
+  return resultado;
+}
+
+// Elimina rectangulos libres que quedan completamente contenidos dentro de
+// otro (serian redundantes y solo hacen mas lenta la busqueda siguiente).
+function podarLibres_(libres) {
+  const contenido = (a, b) =>
+    a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
+  return libres.filter((a, i) => {
+    for (let j = 0; j < libres.length; j++) {
+      if (i === j) continue;
+      const b = libres[j];
+      if (contenido(a, b) && !(contenido(b, a) && j < i)) return false;
+    }
+    return true;
+  });
+}
+
+// Puntaje "Best Short Side Fit": el lado sobrante mas chico entre el hueco y
+// la pieza (y como desempate, el lado sobrante mas grande). Menor es mejor.
+function puntajeAjuste_(libre, o) {
+  const sobranteX = libre.w - o.dx;
+  const sobranteY = libre.h - o.dy;
+  return { ladoCorto: Math.min(sobranteX, sobranteY), ladoLargo: Math.max(sobranteX, sobranteY) };
+}
+
+function mejorQue_(a, b) {
+  if (!b) return true;
+  if (a.ladoCorto !== b.ladoCorto) return a.ladoCorto < b.ladoCorto;
+  return a.ladoLargo < b.ladoLargo;
 }
 
 function empacar(piezas, tamano) {
@@ -44,52 +102,64 @@ function empacar(piezas, tamano) {
       }
     });
 
-    // Se ordena por la altura MINIMA posible de cada pieza (la que usaria por
-    // defecto al abrir una fila nueva). Usar la altura maxima aqui degradaba
-    // el resultado: procesaba las piezas sin veta como si fueran mas altas de
-    // lo que realmente se van a colocar, desordenando el empaquetado.
+    // Se ordena por area descendente: las piezas grandes se acomodan
+    // primero, dejando los huecos chicos que van quedando disponibles para
+    // las piezas mas chicas (asi rinden mejor los algoritmos de "mejor
+    // encaje").
     instancias.sort((a, b) => {
-      const dyA = Math.min(...a.orientaciones.map((o) => o.dy));
-      const dyB = Math.min(...b.orientaciones.map((o) => o.dy));
-      return dyB - dyA;
+      const areaA = Math.max(...a.orientaciones.map((o) => o.dx * o.dy));
+      const areaB = Math.max(...b.orientaciones.map((o) => o.dx * o.dy));
+      return areaB - areaA;
     });
 
     const sheets = [];
-    let currentSheet = null;
-    let shelfY = 0;
-    let shelfHeight = 0;
-    let cursorX = 0;
 
     instancias.forEach((pieza) => {
-      // 1) intenta que la pieza quepa en la fila (shelf) actual, en cualquiera
-      //    de sus orientaciones validas, sin sobrepasar el ancho ni la altura de la fila.
-      let elegida = currentSheet
-        ? pieza.orientaciones.find((o) => cursorX + o.dx <= sheetW && o.dy <= shelfHeight)
-        : null;
+      let mejor = null;
+      sheets.forEach((sheet) => {
+        sheet.libres.forEach((libre, libreIdx) => {
+          pieza.orientaciones.forEach((o) => {
+            if (o.dx > libre.w || o.dy > libre.h) return;
+            const puntaje = puntajeAjuste_(libre, o);
+            if (mejorQue_(puntaje, mejor && mejor.puntaje)) {
+              mejor = { sheet, libreIdx, orientacion: o, puntaje };
+            }
+          });
+        });
+      });
 
-      let necesitaNuevaFila = !elegida;
-      if (necesitaNuevaFila) {
-        // 2) si no cabe en la fila actual, elige la orientacion mas baja posible
-        //    (para desperdiciar lo menos de alto al abrir una fila/lamina nueva).
-        elegida = pieza.orientaciones.reduce(
-          (mejor, o) => (!mejor || o.dy < mejor.dy ? o : mejor), null
-        );
-        let necesitaNuevaLamina = currentSheet === null || shelfY + shelfHeight + elegida.dy > sheetH;
-        if (necesitaNuevaLamina) {
-          currentSheet = { numero: sheets.length + 1, piezas: [] };
-          sheets.push(currentSheet);
-          shelfY = 0;
-        } else {
-          shelfY += shelfHeight;
-        }
-        shelfHeight = elegida.dy;
-        cursorX = 0;
+      let sheetDestino;
+      let libreIdxDestino;
+      let orientacionElegida;
+
+      if (mejor) {
+        sheetDestino = mejor.sheet;
+        libreIdxDestino = mejor.libreIdx;
+        orientacionElegida = mejor.orientacion;
+      } else {
+        // No cupo en ninguna lamina abierta: se abre una nueva.
+        sheetDestino = { numero: sheets.length + 1, piezas: [], libres: [{ x: 0, y: 0, w: sheetW, h: sheetH }] };
+        sheets.push(sheetDestino);
+        libreIdxDestino = 0;
+        let mejorNueva = null;
+        pieza.orientaciones.forEach((o) => {
+          const puntaje = puntajeAjuste_(sheetDestino.libres[0], o);
+          if (mejorQue_(puntaje, mejorNueva && mejorNueva.puntaje)) {
+            mejorNueva = { orientacion: o, puntaje };
+          }
+        });
+        orientacionElegida = mejorNueva.orientacion;
       }
-      currentSheet.piezas.push({
-        x: cursorX, y: shelfY, dx: elegida.dx, dy: elegida.dy,
+
+      const libreDestino = sheetDestino.libres[libreIdxDestino];
+      sheetDestino.piezas.push({
+        x: libreDestino.x, y: libreDestino.y, dx: orientacionElegida.dx, dy: orientacionElegida.dy,
         descripcion: pieza.descripcion, largo: pieza.largo, ancho: pieza.ancho, veta: pieza.veta,
       });
-      cursorX += elegida.dx;
+
+      const nuevosLibres = dividirLibre_(libreDestino, orientacionElegida.dx, orientacionElegida.dy);
+      sheetDestino.libres.splice(libreIdxDestino, 1, ...nuevosLibres);
+      sheetDestino.libres = podarLibres_(sheetDestino.libres);
     });
 
     const areaLaminaMM2 = sheetW * sheetH;
@@ -98,7 +168,7 @@ function empacar(piezas, tamano) {
     );
 
     resultado[material] = {
-      sheets,
+      sheets: sheets.map((s) => ({ numero: s.numero, piezas: s.piezas })),
       sheetsUsadas: sheets.length,
       areaLaminaMM2,
       areaUsadaMM2,
