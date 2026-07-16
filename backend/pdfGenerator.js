@@ -16,8 +16,11 @@ function generarPDF(res, { resultadoEmpaque, tamano, cantos, preciosMaterial, pr
   }
   doc.fontSize(18).fillColor("#000").text("Optimización de Cortes - Cedrel", 115, 25);
   if (nombreProyecto) doc.fontSize(10).fillColor("#555").text(nombreProyecto, 115, 48);
+  const nominalTexto = tamano.anchoNominal
+    ? `física ${tamano.anchoNominal} x ${tamano.altoNominal} mm, útil ${tamano.anchoVeta} x ${tamano.alto} mm (descuento de corte)`
+    : `${tamano.anchoVeta} x ${tamano.alto} mm`;
   doc.fontSize(9).fillColor("#777").text(
-    `Lámina: ${tamano.nombre} (${tamano.anchoVeta} x ${tamano.alto} mm) · Generado: ${new Date().toLocaleString("es-CO")}`,
+    `Lámina: ${tamano.nombre} — ${nominalTexto} · Generado: ${new Date().toLocaleString("es-CO")}`,
     115, 62
   );
 
@@ -102,6 +105,19 @@ function dibujarLamina(doc, sheet, sheetW, sheetH, startX, startY) {
     const pw = p.dx * scale;
     const ph = p.dy * scale;
     doc.lineWidth(0.5).rect(px, py, pw, ph).stroke("#777");
+
+    // Lineas de veta: la lamina siempre tiene su veta en sentido horizontal
+    // (eje X), asi que cualquier pieza que SI lleve veta (largo o corto) se
+    // dibuja con lineas horizontales para que se identifique de un vistazo.
+    // Las piezas con veta "no" (madera lisa) quedan sin lineas.
+    if (p.veta && p.veta !== "no" && pw > 8 && ph > 6) {
+      const numLineas = Math.max(2, Math.min(8, Math.floor(ph / 8)));
+      for (let i = 1; i < numLineas; i++) {
+        const ly = py + (ph * i) / numLineas;
+        doc.lineWidth(0.3).moveTo(px + 2, ly).lineTo(px + pw - 2, ly).stroke("#C8A97E");
+      }
+    }
+
     if (pw > 26 && ph > 11) {
       doc.fontSize(6).fillColor("#333").text(
         `${Math.round(p.largo)}x${Math.round(p.ancho)}`,

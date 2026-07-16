@@ -147,14 +147,25 @@ app.get("/api/procesar", async (req, res) => {
       return res.status(400).json({ error: "Tamaño de lámina no encontrado" });
     }
 
-    const resultadoEmpaque = empacar(piezas, tamanoObj);
+    // Descuento de corte: al aserrar se pierde material en los bordes, asi
+    // que el area realmente aprovechable es menor que la lamina fisica.
+    const MARGEN_CORTE_MM = 20;
+    const tamanoUtil = {
+      nombre: tamanoObj.nombre,
+      anchoVeta: tamanoObj.anchoVeta - MARGEN_CORTE_MM,
+      alto: tamanoObj.alto - MARGEN_CORTE_MM,
+      anchoNominal: tamanoObj.anchoVeta,
+      altoNominal: tamanoObj.alto,
+    };
+
+    const resultadoEmpaque = empacar(piezas, tamanoUtil);
     const cantos = calcularCantos(piezas);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", "attachment; filename=optimizacion-cedrel.pdf");
     generarPDF(res, {
       resultadoEmpaque,
-      tamano: tamanoObj,
+      tamano: tamanoUtil,
       cantos,
       preciosMaterial: config.preciosMaterial || {},
       preciosCanto: config.preciosCanto || { flexible: 0, rigido: 0 },
