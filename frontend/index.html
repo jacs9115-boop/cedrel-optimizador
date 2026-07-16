@@ -509,10 +509,48 @@ document.getElementById("btnAbrirPrecios").addEventListener("click", () => {
   renderPreciosCorte();
 });
 
-document.getElementById("btnGenerarPDF").addEventListener("click", () => {
+document.getElementById("btnGenerarPDF").addEventListener("click", async () => {
   const tamano = document.getElementById("selectTamano").value;
   const url = `${API_BASE}/api/procesar?fileId=${encodeURIComponent(archivoSeleccionadoId)}&tamano=${encodeURIComponent(tamano)}`;
-  window.location.href = url;
+  const btn = document.getElementById("btnGenerarPDF");
+  const textoOriginal = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Generando PDF...";
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || "Error al generar el PDF");
+    }
+    const blob = await res.blob();
+    const nombreArchivo = "optimizacion-cedrel.pdf";
+    const file = new File([blob], nombreArchivo, { type: "application/pdf" });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "Optimización de Cortes - Cedrel" });
+      } else {
+        throw new Error("share-no-soportado");
+      }
+    } catch (shareErr) {
+      if (shareErr && shareErr.name === "AbortError") {
+        // el usuario cerró el menú de compartir, no hacer nada mas
+      } else {
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = nombreArchivo;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+      }
+    }
+  } catch (err) {
+    mostrarToast("Error: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+  }
 });
 
 if ("serviceWorker" in navigator) {
