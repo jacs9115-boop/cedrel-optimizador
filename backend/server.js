@@ -193,14 +193,16 @@ app.get("/api/procesar", async (req, res) => {
     }
 
     // Descuento de corte: al aserrar se pierde material en los bordes, asi
-    // que el area realmente aprovechable es menor que la lamina fisica.
-    const MARGEN_CORTE_MM = 20;
+    // que el area realmente aprovechable es menor que la lamina fisica. El
+    // margen es editable por tamaño desde Ajustes (por defecto 20mm).
+    const margen = tamanoObj.margen === undefined || tamanoObj.margen === null ? 20 : tamanoObj.margen;
     const tamanoUtil = {
       nombre: tamanoObj.nombre,
-      anchoVeta: tamanoObj.anchoVeta - MARGEN_CORTE_MM,
-      alto: tamanoObj.alto - MARGEN_CORTE_MM,
+      anchoVeta: tamanoObj.anchoVeta - margen,
+      alto: tamanoObj.alto - margen,
       anchoNominal: tamanoObj.anchoVeta,
       altoNominal: tamanoObj.alto,
+      margen,
     };
 
     const resultadoEmpaque = empacar(piezas, tamanoUtil);
