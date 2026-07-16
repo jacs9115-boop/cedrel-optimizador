@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-const { empacar, calcularCantos } = require("./nido");
+const { empacar, calcularCantos, calcularCorte } = require("./nido");
 const { generarPDF } = require("./pdfGenerator");
 
 const PORT = process.env.PORT || 3000;
@@ -104,6 +104,51 @@ app.post("/api/config/precio-canto", async (req, res) => {
   }
 });
 
+app.post("/api/config/precio-canto-material", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const data = await llamarAppsScript(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accion: "guardar_precio_canto_material", ...req.body }),
+    });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+app.post("/api/config/precio-corte", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const data = await llamarAppsScript(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accion: "guardar_precio_corte", ...req.body }),
+    });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+app.delete("/api/config/precio-corte/:espesor", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const data = await llamarAppsScript(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accion: "borrar_precio_corte", espesor: req.params.espesor }),
+    });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
 app.get("/api/leer", async (req, res) => {
   try {
     requireAppsScriptUrl();
@@ -160,6 +205,7 @@ app.get("/api/procesar", async (req, res) => {
 
     const resultadoEmpaque = empacar(piezas, tamanoUtil);
     const cantos = calcularCantos(piezas);
+    const corte = calcularCorte(piezas);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", "attachment; filename=optimizacion-cedrel.pdf");
@@ -167,8 +213,11 @@ app.get("/api/procesar", async (req, res) => {
       resultadoEmpaque,
       tamano: tamanoUtil,
       cantos,
+      corte,
       preciosMaterial: config.preciosMaterial || {},
       preciosCanto: config.preciosCanto || { flexible: 0, rigido: 0 },
+      preciosCantoMaterial: config.preciosCantoMaterial || {},
+      preciosCorte: config.preciosCorte || {},
       logoPath: path.join(__dirname, "..", "frontend", "icons", "icon-512.png"),
     });
   } catch (err) {

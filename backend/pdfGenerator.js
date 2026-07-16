@@ -4,7 +4,7 @@ function formatoMoneda(valor) {
   return "$" + Math.round(valor || 0).toLocaleString("es-CO");
 }
 
-function generarPDF(res, { resultadoEmpaque, tamano, cantos, preciosMaterial, preciosCanto, logoPath, nombreProyecto }) {
+function generarPDF(res, { resultadoEmpaque, tamano, cantos, corte, preciosMaterial, preciosCanto, preciosCantoMaterial, preciosCorte, logoPath, nombreProyecto }) {
   const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 30 });
   doc.pipe(res);
 
@@ -45,14 +45,73 @@ function generarPDF(res, { resultadoEmpaque, tamano, cantos, preciosMaterial, pr
   y += 8;
   const flexibleM = cantos.flexibleMM / 1000;
   const rigidoM = cantos.rigidoMM / 1000;
-  const costoCantoFlex = flexibleM * (preciosCanto.flexible || 0);
-  const costoCantoRig = rigidoM * (preciosCanto.rigido || 0);
-  costoTotal += costoCantoFlex + costoCantoRig;
+  const costoInstalacionFlex = flexibleM * (preciosCanto.flexible || 0);
+  const costoInstalacionRig = rigidoM * (preciosCanto.rigido || 0);
+  costoTotal += costoInstalacionFlex + costoInstalacionRig;
 
-  doc.fontSize(11).text(`Canto flexible: ${flexibleM.toFixed(2)} m — ${formatoMoneda(costoCantoFlex)}`, 30, y);
+  doc.fillColor("#000").fontSize(11).text(`Instalación canto flexible: ${flexibleM.toFixed(2)} m — ${formatoMoneda(costoInstalacionFlex)}`, 30, y);
   y += 16;
-  doc.text(`Canto rígido: ${rigidoM.toFixed(2)} m — ${formatoMoneda(costoCantoRig)}`, 30, y);
-  y += 24;
+  doc.text(`Instalación canto rígido: ${rigidoM.toFixed(2)} m — ${formatoMoneda(costoInstalacionRig)}`, 30, y);
+  y += 22;
+
+  // Canto (material): aparte de la instalacion, cambia segun la lamina y
+  // segun si el lado es flexible o rigido.
+  const materialesConCanto = Object.keys(cantos.porMaterial).filter(
+    (m) => cantos.porMaterial[m].flexibleMM > 0 || cantos.porMaterial[m].rigidoMM > 0
+  );
+  if (materialesConCanto.length) {
+    doc.fontSize(11).text("Canto (material) por lámina:", 30, y);
+    y += 15;
+    doc.fontSize(9);
+    materialesConCanto.forEach((material) => {
+      const c = cantos.porMaterial[material];
+      const precioCantoMat = preciosCantoMaterial[material] || {};
+      if (c.flexibleMM > 0) {
+        const m = c.flexibleMM / 1000;
+        const tienePrecio = precioCantoMat.flexible > 0;
+        const costo = tienePrecio ? m * precioCantoMat.flexible : 0;
+        costoTotal += costo;
+        doc.text(`  ${material} — flexible: ${m.toFixed(2)} m` + (tienePrecio ? ` — ${formatoMoneda(costo)}` : " — (sin precio)"), 30, y, { width: 760 });
+        y += 13;
+      }
+      if (c.rigidoMM > 0) {
+        const m = c.rigidoMM / 1000;
+        const tienePrecio = precioCantoMat.rigido > 0;
+        const costo = tienePrecio ? m * precioCantoMat.rigido : 0;
+        costoTotal += costo;
+        doc.text(`  ${material} — rígido: ${m.toFixed(2)} m` + (tienePrecio ? ` — ${formatoMoneda(costo)}` : " — (sin precio)"), 30, y, { width: 760 });
+        y += 13;
+      }
+    });
+    y += 9;
+  }
+
+  // Servicio de corte: se cobra por metro lineal cortado, agrupado por
+  // espesor de lamina (el precio no depende del material especifico).
+  const corteEspesor = {};
+  Object.keys(corte || {}).forEach((material) => {
+    const c = corte[material];
+    const key = c.espesor || "Sin espesor";
+    if (!corteEspesor[key]) corteEspesor[key] = 0;
+    corteEspesor[key] += c.metros;
+  });
+  const espesores = Object.keys(corteEspesor);
+  if (espesores.length) {
+    doc.fontSize(11).text("Servicio de corte:", 30, y);
+    y += 15;
+    doc.fontSize(9);
+    espesores.forEach((esp) => {
+      const metros = corteEspesor[esp];
+      const precio = preciosCorte[esp];
+      const tienePrecio = precio !== undefined && precio !== null && precio > 0;
+      const costo = tienePrecio ? metros * precio : 0;
+      costoTotal += costo;
+      doc.text(`  ${esp}: ${metros.toFixed(2)} m` + (tienePrecio ? ` — ${formatoMoneda(costo)}` : " — (sin precio configurado)"), 30, y, { width: 760 });
+      y += 13;
+    });
+    y += 9;
+  }
+
   doc.fontSize(14).text(`COSTO TOTAL ESTIMADO: ${formatoMoneda(costoTotal)}`, 30, y);
 
   const anyErrores = materiales.some((m) => resultadoEmpaque[m].errores && resultadoEmpaque[m].errores.length);

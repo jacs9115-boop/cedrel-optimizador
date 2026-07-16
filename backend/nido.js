@@ -113,7 +113,9 @@ function empacar(piezas, tamano) {
 function calcularCantos(piezas) {
   let flexibleMM = 0;
   let rigidoMM = 0;
+  const porMaterial = {};
   piezas.forEach((p) => {
+    if (!porMaterial[p.material]) porMaterial[p.material] = { flexibleMM: 0, rigidoMM: 0 };
     const lados = [
       { tipo: p.l1, longitud: p.largo },
       { tipo: p.l2, longitud: p.largo },
@@ -121,11 +123,39 @@ function calcularCantos(piezas) {
       { tipo: p.a2, longitud: p.ancho },
     ];
     lados.forEach((lado) => {
-      if (lado.tipo === "D") flexibleMM += lado.longitud * p.cantidad;
-      if (lado.tipo === "G") rigidoMM += lado.longitud * p.cantidad;
+      if (lado.tipo === "D") {
+        flexibleMM += lado.longitud * p.cantidad;
+        porMaterial[p.material].flexibleMM += lado.longitud * p.cantidad;
+      }
+      if (lado.tipo === "G") {
+        rigidoMM += lado.longitud * p.cantidad;
+        porMaterial[p.material].rigidoMM += lado.longitud * p.cantidad;
+      }
     });
   });
-  return { flexibleMM, rigidoMM };
+  return { flexibleMM, rigidoMM, porMaterial };
 }
 
-module.exports = { empacar, calcularCantos };
+// El espesor se toma del nombre del material (ej: "15mm Blanco" -> "15mm"),
+// que es como llega desde el despiece, para poder cobrar el servicio de
+// corte segun el precio configurado por espesor.
+function extraerEspesorMM_(material) {
+  const match = /(\d+)\s*mm/i.exec(material || "");
+  return match ? `${match[1]}mm` : null;
+}
+
+// El servicio de corte se cobra por metro lineal cortado. Se aproxima como
+// el perimetro de cada pieza (2 * (largo + ancho)) multiplicado por la
+// cantidad de piezas.
+function calcularCorte(piezas) {
+  const porMaterial = {};
+  piezas.forEach((p) => {
+    if (!porMaterial[p.material]) {
+      porMaterial[p.material] = { metros: 0, espesor: extraerEspesorMM_(p.material) };
+    }
+    porMaterial[p.material].metros += ((2 * (p.largo + p.ancho)) / 1000) * p.cantidad;
+  });
+  return porMaterial;
+}
+
+module.exports = { empacar, calcularCantos, calcularCorte, extraerEspesorMM_ };
