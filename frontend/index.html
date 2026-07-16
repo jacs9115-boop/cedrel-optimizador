@@ -155,16 +155,31 @@
 
   <div class="tab-panel" id="tabPrecios">
     <div class="field">
-      <label>Canto flexible ($ por metro lineal)</label>
+      <label>Instalación canto flexible ($ por metro lineal)</label>
       <input type="number" id="precioCantoFlexible" />
     </div>
     <div class="field">
-      <label>Canto rígido ($ por metro lineal)</label>
+      <label>Instalación canto rígido ($ por metro lineal)</label>
       <input type="number" id="precioCantoRigido" />
     </div>
-    <button type="button" class="btn-secondary" id="btnGuardarCantos" style="color:var(--accent);font-weight:700">Guardar precios de canto</button>
+    <button type="button" class="btn-secondary" id="btnGuardarCantos" style="color:var(--accent);font-weight:700">Guardar precios de instalación</button>
+
     <h2 style="margin-top:18px">Precio por lámina de cada material</h2>
     <div id="listaPreciosMaterial"></div>
+
+    <h2 style="margin-top:18px">Canto (material) por lámina</h2>
+    <div class="empty" style="padding:0 0 10px;font-size:12.5px">Precio del canto en sí (aparte de la instalación), según la lámina.</div>
+    <div id="listaPreciosCantoMaterial"></div>
+
+    <h2 style="margin-top:18px">Servicio de corte por espesor</h2>
+    <div id="listaPreciosCorte"></div>
+    <div class="mini-form">
+      <input type="text" id="nuevoCorteEspesor" placeholder="Espesor (ej: 15mm)" />
+    </div>
+    <div class="mini-form">
+      <input type="number" id="nuevoCortePrecio" placeholder="$ por metro" />
+      <button type="button" id="btnAgregarCorte">+</button>
+    </div>
   </div>
 
   <button type="button" class="btn-secondary" id="btnCerrarAjustes">Cerrar</button>
@@ -177,7 +192,7 @@
 <script>
 const API_BASE = "";
 let archivoSeleccionadoId = null;
-let configActual = { tamanos: [], preciosMaterial: {}, preciosCanto: { flexible: 0, rigido: 0 } };
+let configActual = { tamanos: [], preciosMaterial: {}, preciosCanto: { flexible: 0, rigido: 0 }, preciosCantoMaterial: {}, preciosCorte: {} };
 let materialesDespiece = [];
 
 const toast = document.getElementById("toast");
@@ -196,6 +211,8 @@ document.getElementById("btnAjustes").addEventListener("click", () => {
   sheetAjustes.classList.add("open");
   renderTamanos();
   renderPreciosMaterial();
+  renderPreciosCantoMaterial();
+  renderPreciosCorte();
 });
 document.getElementById("btnCerrarAjustes").addEventListener("click", cerrarAjustes);
 overlayAjustes.addEventListener("click", cerrarAjustes);
@@ -307,6 +324,87 @@ function renderPreciosMaterial() {
   });
 }
 
+function renderPreciosCantoMaterial() {
+  const cont = document.getElementById("listaPreciosCantoMaterial");
+  const materiales = Object.keys(configActual.preciosMaterial);
+  if (!materiales.length) {
+    cont.innerHTML = '<div class="empty">Todavía no hay materiales. Carga un despiece primero para que aparezcan aquí.</div>';
+    return;
+  }
+  cont.innerHTML = materiales.sort().map((m) => {
+    const precio = configActual.preciosCantoMaterial[m] || { flexible: 0, rigido: 0 };
+    return `
+    <div class="fila-config" style="flex-wrap:wrap">
+      <span class="nombre">${m}</span>
+      <input type="number" data-canto-material="${m}" data-tipo="flexible" value="${precio.flexible || ""}" placeholder="Flexible $/m" style="width:110px" />
+      <input type="number" data-canto-material="${m}" data-tipo="rigido" value="${precio.rigido || ""}" placeholder="Rígido $/m" style="width:110px" />
+    </div>`;
+  }).join("");
+  cont.querySelectorAll("input[data-canto-material]").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const material = input.dataset.cantoMaterial;
+      const actual = configActual.preciosCantoMaterial[material] || { flexible: 0, rigido: 0 };
+      const flexible = input.dataset.tipo === "flexible" ? (Number(input.value) || 0) : actual.flexible || 0;
+      const rigido = input.dataset.tipo === "rigido" ? (Number(input.value) || 0) : actual.rigido || 0;
+      try {
+        await fetch(API_BASE + "/api/config/precio-canto-material", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ material, flexible, rigido }),
+        });
+        configActual.preciosCantoMaterial[material] = { flexible, rigido };
+        mostrarToast(`Canto de "${material}" guardado ✓`);
+      } catch (e) { mostrarToast("Error al guardar precio", true); }
+    });
+  });
+}
+
+function renderPreciosCorte() {
+  const cont = document.getElementById("listaPreciosCorte");
+  const espesores = Object.keys(configActual.preciosCorte);
+  if (!espesores.length) {
+    cont.innerHTML = '<div class="empty">No hay espesores configurados todavía.</div>';
+    return;
+  }
+  cont.innerHTML = espesores.sort().map((esp) => `
+    <div class="fila-config">
+      <span class="nombre">${esp}</span>
+      <span style="color:var(--muted);font-size:13px">${formatoMonedaFrontend(configActual.preciosCorte[esp])} / m</span>
+      <button type="button" class="quitar" onclick="quitarPrecioCorte('${esp.replace(/'/g, "\\'")}')">✕</button>
+    </div>
+  `).join("");
+}
+
+function formatoMonedaFrontend(valor) {
+  return "$" + Math.round(valor || 0).toLocaleString("es-CO");
+}
+
+document.getElementById("btnAgregarCorte").addEventListener("click", async () => {
+  const espesor = document.getElementById("nuevoCorteEspesor").value.trim();
+  const precio = Number(document.getElementById("nuevoCortePrecio").value) || 0;
+  if (!espesor || !precio) { mostrarToast("Completa espesor y precio", true); return; }
+  try {
+    await fetch(API_BASE + "/api/config/precio-corte", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ espesor, precio }),
+    });
+    document.getElementById("nuevoCorteEspesor").value = "";
+    document.getElementById("nuevoCortePrecio").value = "";
+    configActual.preciosCorte[espesor] = precio;
+    renderPreciosCorte();
+    mostrarToast("Precio de corte agregado ✓");
+  } catch (e) { mostrarToast("Error al agregar precio de corte", true); }
+});
+
+async function quitarPrecioCorte(espesor) {
+  try {
+    await fetch(`${API_BASE}/api/config/precio-corte/${encodeURIComponent(espesor)}`, { method: "DELETE" });
+    delete configActual.preciosCorte[espesor];
+    renderPreciosCorte();
+    mostrarToast("Precio de corte eliminado");
+  } catch (e) { mostrarToast("Error al eliminar", true); }
+}
+window.quitarPrecioCorte = quitarPrecioCorte;
+
 document.getElementById("btnGuardarCantos").addEventListener("click", async () => {
   const flexible = Number(document.getElementById("precioCantoFlexible").value) || 0;
   const rigido = Number(document.getElementById("precioCantoRigido").value) || 0;
@@ -407,6 +505,8 @@ document.getElementById("btnAbrirPrecios").addEventListener("click", () => {
   sheetAjustes.classList.add("open");
   document.querySelector('.tab-btn[data-tab="precios"]').click();
   renderPreciosMaterial();
+  renderPreciosCantoMaterial();
+  renderPreciosCorte();
 });
 
 document.getElementById("btnGenerarPDF").addEventListener("click", () => {
