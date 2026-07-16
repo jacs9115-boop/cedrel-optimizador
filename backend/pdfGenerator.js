@@ -112,10 +112,12 @@ function dibujarLamina(doc, sheet, sheetW, sheetH, startX, startY) {
     // Las piezas con veta "no" (madera lisa) quedan sin lineas.
     if (p.veta && p.veta !== "no" && pw > 8 && ph > 6) {
       const numLineas = Math.max(2, Math.min(8, Math.floor(ph / 8)));
+      doc.strokeColor("#A67C52").lineWidth(0.4);
       for (let i = 1; i < numLineas; i++) {
         const ly = py + (ph * i) / numLineas;
-        doc.lineWidth(0.3).moveTo(px + 2, ly).lineTo(px + pw - 2, ly).stroke("#C8A97E");
+        doc.moveTo(px + 2, ly).lineTo(px + pw - 2, ly).stroke();
       }
+      doc.strokeColor("#777");
     }
 
     if (pw > 26 && ph > 11) {
