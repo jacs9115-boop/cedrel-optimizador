@@ -149,6 +149,7 @@
     <div class="mini-form">
       <input type="number" id="nuevoTamanoAncho" placeholder="Ancho veta (mm)" />
       <input type="number" id="nuevoTamanoAlto" placeholder="Alto (mm)" />
+      <input type="number" id="nuevoTamanoMargen" placeholder="Margen (mm)" value="20" style="max-width:90px" />
       <button type="button" id="btnAgregarTamano">+</button>
     </div>
   </div>
@@ -257,24 +258,44 @@ function renderTamanos() {
   cont.innerHTML = configActual.tamanos.map((t) => `
     <div class="fila-config">
       <span class="nombre">${t.nombre}<br/><span style="color:var(--muted);font-size:11.5px">${t.anchoVeta} x ${t.alto} mm</span></span>
+      <input type="number" data-margen-tamano="${t.nombre}" value="${t.margen !== undefined ? t.margen : 20}" title="Margen (mm)" style="width:70px" />
       <button type="button" class="quitar" onclick="quitarTamano('${t.nombre.replace(/'/g, "\\'")}')">✕</button>
     </div>
   `).join("");
+  cont.querySelectorAll("input[data-margen-tamano]").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const nombre = input.dataset.margenTamano;
+      const t = configActual.tamanos.find((x) => x.nombre === nombre);
+      if (!t) return;
+      const margen = Number(input.value) || 0;
+      try {
+        await fetch(API_BASE + "/api/config/tamano", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nombre: t.nombre, anchoVeta: t.anchoVeta, alto: t.alto, margen }),
+        });
+        t.margen = margen;
+        mostrarToast(`Margen de "${nombre}" guardado ✓`);
+      } catch (e) { mostrarToast("Error al guardar margen", true); }
+    });
+  });
 }
 
 document.getElementById("btnAgregarTamano").addEventListener("click", async () => {
   const nombre = document.getElementById("nuevoTamanoNombre").value.trim();
   const ancho = Number(document.getElementById("nuevoTamanoAncho").value);
   const alto = Number(document.getElementById("nuevoTamanoAlto").value);
+  const margenInput = document.getElementById("nuevoTamanoMargen").value;
+  const margen = margenInput === "" ? 20 : Number(margenInput);
   if (!nombre || !ancho || !alto) { mostrarToast("Completa nombre, ancho y alto", true); return; }
   try {
     await fetch(API_BASE + "/api/config/tamano", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nombre, anchoVeta: ancho, alto }),
+      body: JSON.stringify({ nombre, anchoVeta: ancho, alto, margen }),
     });
     document.getElementById("nuevoTamanoNombre").value = "";
     document.getElementById("nuevoTamanoAncho").value = "";
     document.getElementById("nuevoTamanoAlto").value = "";
+    document.getElementById("nuevoTamanoMargen").value = "20";
     await cargarConfig();
     renderTamanos();
     mostrarToast("Tamaño agregado ✓");
