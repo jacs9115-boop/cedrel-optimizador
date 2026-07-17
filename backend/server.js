@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-const { empacar, calcularCantos, calcularCorte, reempacarLamina } = require("./nido");
+const { empacar, calcularCantos, calcularCorte, reempacarLamina, agregarAPiezas } = require("./nido");
 const { generarPDF } = require("./pdfGenerator");
 
 const PORT = process.env.PORT || 3000;
@@ -264,12 +264,11 @@ app.get("/api/empacar", async (req, res) => {
 });
 
 // Mueve una o varias piezas de una lamina a otra dentro del editor manual.
-// Para garantizar que el resultado siga siendo cortable de guillotina y sin
-// solapamientos, no se intenta "encajar" las piezas en el hueco donde
-// estaban; en cambio se reacomodan desde cero tanto la lamina de origen (sin
-// esas piezas) como la de destino (con las piezas agregadas). Si la lamina
-// de destino no alcanza a acomodar todas sus piezas (incluidas las nuevas),
-// el movimiento se rechaza completo y no se cambia nada.
+// No es "todo o nada": las piezas que ya estaban en la lamina de destino
+// quedan fijas (nunca se pierden ni se reacomodan), y las piezas
+// seleccionadas se van agregando de a una, de mayor a menor area, en el
+// espacio libre que vaya quedando. Las que no alcancen a caber se quedan en
+// la lamina de origen, y la respuesta indica cuantas si se movieron.
 app.post("/api/mover-pieza", (req, res) => {
   try {
     const { sheets, sheetOrigen, piezaIndices, sheetDestino, anchoVeta, alto } = req.body;
@@ -287,25 +286,32 @@ app.post("/api/mover-pieza", (req, res) => {
       return res.status(400).json({ error: "Pieza no encontrada" });
     }
 
-    const origenRestante = origen.piezas.filter((_, i) => !indices.has(i));
-    const destinoConNuevas = [...destino.piezas, ...piezasAMover];
-
-    const rDestino = reempacarLamina(destinoConNuevas, anchoVeta, alto);
-    if (rDestino.noCaben.length > 0) {
-      return res.json({ ok: false, error: "Las piezas no caben en esa lámina" });
+    const resultado = agregarAPiezas(destino.piezas, piezasAMover, anchoVeta, alto);
+    if (resultado.colocadas.length === 0) {
+      return res.json({ ok: false, error: "Ninguna de las piezas seleccionadas cabe en esa lámina" });
     }
+
+    const noCabenSet = new Set(resultado.noCaben);
+    const indicesMovidos = [...indices].filter((i) => !noCabenSet.has(origen.piezas[i]));
+    const indicesMovidosSet = new Set(indicesMovidos);
+    const origenRestante = origen.piezas.filter((_, i) => !indicesMovidosSet.has(i));
     const rOrigen = reempacarLamina(origenRestante, anchoVeta, alto);
 
     let nuevasLaminas = sheets.map((s) => {
       if (s.numero === sheetOrigen) return { numero: s.numero, piezas: rOrigen.piezas };
-      if (s.numero === sheetDestino) return { numero: s.numero, piezas: rDestino.piezas };
+      if (s.numero === sheetDestino) return { numero: s.numero, piezas: resultado.piezas };
       return s;
     });
     // Si la lamina de origen quedo vacia, se elimina y se renumeran las demas.
     nuevasLaminas = nuevasLaminas.filter((s) => s.piezas.length > 0);
     nuevasLaminas.forEach((s, i) => { s.numero = i + 1; });
 
-    res.json({ ok: true, sheets: nuevasLaminas });
+    res.json({
+      ok: true,
+      sheets: nuevasLaminas,
+      movidas: indicesMovidos.length,
+      totalSeleccionadas: piezaIndices.length,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || "Error inesperado" });
@@ -313,11 +319,11 @@ app.post("/api/mover-pieza", (req, res) => {
 });
 
 // Dadas una o varias piezas de una lamina, busca en cuales OTRAS laminas del
-// mismo material cabrian TODAS juntas si se movieran para alla (reacomodando
-// esa lamina desde cero junto con las piezas nuevas). Se usa para sugerirle
-// al usuario a donde mover, sin que tenga que ir probando lamina por lamina;
-// el usuario tambien puede elegir cualquier otra lamina a mano (el endpoint
-// de mover-pieza valida igual si cabe o no).
+// mismo material cabria por lo menos una de ellas (agregandolas al espacio
+// libre que quede, sin reacomodar lo que ya esta puesto ahi). Se usa para
+// sugerirle al usuario a donde mover, indicando cuantas de las
+// seleccionadas entrarian en cada lamina candidata -- no hace falta que
+// quepan todas para que aparezca en la lista.
 app.post("/api/donde-cabe", (req, res) => {
   try {
     const { sheets, sheetOrigen, piezaIndices, anchoVeta, alto } = req.body;
@@ -337,14 +343,13 @@ app.post("/api/donde-cabe", (req, res) => {
     const candidatos = [];
     sheets.forEach((s) => {
       if (s.numero === sheetOrigen) return;
-      const conNuevas = [...s.piezas, ...piezas];
-      const r = reempacarLamina(conNuevas, anchoVeta, alto);
-      if (r.noCaben.length === 0) {
+      const r = agregarAPiezas(s.piezas, piezas, anchoVeta, alto);
+      if (r.colocadas.length > 0) {
         const usoResultante = (r.piezas.reduce((sum, p) => sum + p.dx * p.dy, 0) / (anchoVeta * alto)) * 100;
-        candidatos.push({ numero: s.numero, usoResultante });
+        candidatos.push({ numero: s.numero, usoResultante, caben: r.colocadas.length, totalSeleccionadas: piezas.length });
       }
     });
-    candidatos.sort((a, b) => b.usoResultante - a.usoResultante);
+    candidatos.sort((a, b) => b.caben - a.caben || b.usoResultante - a.usoResultante);
 
     res.json({ candidatos });
   } catch (err) {

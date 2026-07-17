@@ -200,7 +200,48 @@ function reempacarLamina(piezas, sheetW, sheetH) {
     sheet.libres = podarLibres_(sheet.libres);
   });
 
-  return { piezas: sheet.piezas, noCaben };
+  return { piezas: sheet.piezas, noCaben, libres: sheet.libres };
+}
+
+// Agrega piezas nuevas a una lamina SIN reacomodar las piezas que ya estaban
+// (esas se dejan fijas, solo se re-derivan sus huecos libres). Las piezas
+// nuevas se intentan colocar de a una, de mayor a menor area, en el espacio
+// libre que vaya quedando. Las que no alcancen a caber se devuelven en
+// "noCaben" y quedan en la lamina de origen. Esto permite mover "las que
+// quepan" en vez de exigir que quepan TODAS las piezas seleccionadas.
+function agregarAPiezas(piezasExistentes, piezasNuevas, sheetW, sheetH) {
+  const base = reempacarLamina(piezasExistentes, sheetW, sheetH);
+  let libres = base.libres;
+
+  const ordenadas = [...piezasNuevas].sort((a, b) => (b.largo * b.ancho) - (a.largo * a.ancho));
+  const colocadas = [];
+  const noCaben = [];
+
+  ordenadas.forEach((p) => {
+    const orientaciones = orientacionesPosibles_(p).filter((o) => o.dx <= sheetW && o.dy <= sheetH);
+    let mejor = null;
+    libres.forEach((libre, libreIdx) => {
+      orientaciones.forEach((o) => {
+        if (o.dx > libre.w || o.dy > libre.h) return;
+        const puntaje = puntajeAjuste_(libre, o);
+        if (mejorQue_(puntaje, mejor && mejor.puntaje)) {
+          mejor = { libreIdx, orientacion: o, puntaje };
+        }
+      });
+    });
+    if (!mejor) { noCaben.push(p); return; }
+
+    const libreDestino = libres[mejor.libreIdx];
+    colocadas.push({
+      x: libreDestino.x, y: libreDestino.y, dx: mejor.orientacion.dx, dy: mejor.orientacion.dy,
+      descripcion: p.descripcion, largo: p.largo, ancho: p.ancho, veta: p.veta,
+    });
+    const nuevosLibres = dividirLibre_(libreDestino, mejor.orientacion.dx, mejor.orientacion.dy);
+    libres.splice(mejor.libreIdx, 1, ...nuevosLibres);
+    libres = podarLibres_(libres);
+  });
+
+  return { piezas: [...base.piezas, ...colocadas], colocadas, noCaben };
 }
 
 function empacar(piezas, tamano) {
@@ -358,4 +399,4 @@ function calcularCorte(piezas) {
   return porMaterial;
 }
 
-module.exports = { empacar, calcularCantos, calcularCorte, extraerEspesorMM_, reempacarLamina };
+module.exports = { empacar, calcularCantos, calcularCorte, extraerEspesorMM_, reempacarLamina, agregarAPiezas };
