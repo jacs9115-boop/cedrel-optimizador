@@ -637,7 +637,7 @@ document.getElementById("btnGenerarPDF").addEventListener("click", async () => {
 let editorDatos = null;
 let editorMaterialActual = null;
 let editorSheetIndex = 0;
-let editorPiezaSeleccionada = null;
+let editorPiezasSeleccionadas = new Set();
 
 const vistaEditor = document.getElementById("vistaEditor");
 
@@ -660,7 +660,7 @@ async function abrirEditor() {
     editorDatos = data;
     editorMaterialActual = Object.keys(data.resultadoEmpaque)[0];
     editorSheetIndex = 0;
-    editorPiezaSeleccionada = null;
+    editorPiezasSeleccionadas.clear();
     renderTabsEditor();
     renderLaminaEditor();
     renderAccionesPieza();
@@ -680,7 +680,7 @@ function renderTabsEditor() {
     btn.addEventListener("click", () => {
       editorMaterialActual = btn.dataset.material;
       editorSheetIndex = 0;
-      editorPiezaSeleccionada = null;
+      editorPiezasSeleccionadas.clear();
       renderTabsEditor();
       renderLaminaEditor();
       renderAccionesPieza();
@@ -691,7 +691,7 @@ function renderTabsEditor() {
 document.getElementById("editorPrev").addEventListener("click", () => {
   if (editorSheetIndex > 0) {
     editorSheetIndex--;
-    editorPiezaSeleccionada = null;
+    editorPiezasSeleccionadas.clear();
     renderLaminaEditor();
     renderAccionesPieza();
   }
@@ -700,7 +700,7 @@ document.getElementById("editorNext").addEventListener("click", () => {
   const sheets = editorDatos.resultadoEmpaque[editorMaterialActual].sheets;
   if (editorSheetIndex < sheets.length - 1) {
     editorSheetIndex++;
-    editorPiezaSeleccionada = null;
+    editorPiezasSeleccionadas.clear();
     renderLaminaEditor();
     renderAccionesPieza();
   }
@@ -725,7 +725,7 @@ function renderLaminaEditor() {
   cont.style.height = Math.round(sheetH * scale) + "px";
 
   cont.innerHTML = sheet.piezas.map((p, i) => {
-    const seleccionada = i === editorPiezaSeleccionada;
+    const seleccionada = editorPiezasSeleccionadas.has(i);
     return `<div class="pieza-editor ${seleccionada ? "seleccionada" : ""}" data-idx="${i}"
       style="left:${Math.round(p.x * scale)}px; top:${Math.round(p.y * scale)}px; width:${Math.round(p.dx * scale)}px; height:${Math.round(p.dy * scale)}px;"
       >${Math.round(p.largo)}x${Math.round(p.ancho)}</div>`;
@@ -734,7 +734,11 @@ function renderLaminaEditor() {
   cont.querySelectorAll(".pieza-editor").forEach((el) => {
     el.addEventListener("click", () => {
       const idx = Number(el.dataset.idx);
-      editorPiezaSeleccionada = editorPiezaSeleccionada === idx ? null : idx;
+      if (editorPiezasSeleccionadas.has(idx)) {
+        editorPiezasSeleccionadas.delete(idx);
+      } else {
+        editorPiezasSeleccionadas.add(idx);
+      }
       renderLaminaEditor();
       renderAccionesPieza();
     });
@@ -746,18 +750,42 @@ function renderLaminaEditor() {
 
 function renderAccionesPieza() {
   const cont = document.getElementById("editorAcciones");
-  if (editorPiezaSeleccionada === null) {
-    cont.innerHTML = '<div class="empty" style="padding:8px">Toca una pieza en la lámina para moverla a otra.</div>';
+  if (editorPiezasSeleccionadas.size === 0) {
+    cont.innerHTML = '<div class="empty" style="padding:8px">Toca una o más piezas en la lámina para moverlas a otra.</div>';
     return;
   }
   const sheets = editorDatos.resultadoEmpaque[editorMaterialActual].sheets;
-  const pieza = sheets[editorSheetIndex].piezas[editorPiezaSeleccionada];
+  const sheetActual = sheets[editorSheetIndex];
+  const piezas = [...editorPiezasSeleccionadas].map((i) => sheetActual.piezas[i]);
+  const resumenPiezas = piezas.map((p) => `${Math.round(p.largo)}x${Math.round(p.ancho)}`).join(", ");
+
+  const otrasLaminas = sheets.filter((s) => s.numero !== sheetActual.numero);
+  const opcionesManual = otrasLaminas.map((s) => {
+    const usoActual = (s.piezas.reduce((sum, p) => sum + p.dx * p.dy, 0) / (editorDatos.tamanoUtil.anchoVeta * editorDatos.tamanoUtil.alto)) * 100;
+    return `<option value="${s.numero}">Lámina ${s.numero} (uso actual ${usoActual.toFixed(1)}%)</option>`;
+  }).join("");
+
   cont.innerHTML = `
-    <div class="editor-pieza-info">Pieza seleccionada: ${Math.round(pieza.largo)} x ${Math.round(pieza.ancho)} mm</div>
-    <button type="button" class="btn-primary" id="btnBuscarDondeCabe" style="margin-top:0">Buscar dónde cabe</button>
+    <div class="editor-pieza-info">${piezas.length} pieza(s) seleccionada(s): ${resumenPiezas}</div>
+    <button type="button" class="btn-secondary" id="btnDeseleccionar" style="margin-top:0">Deseleccionar todo</button>
+    <button type="button" class="btn-primary" id="btnBuscarDondeCabe">Buscar dónde caben</button>
     <div id="editorCandidatos"></div>
+    <div class="field" style="margin-top:14px">
+      <label>O elige tú la lámina destino</label>
+      <select id="editorSelectManual">${opcionesManual}</select>
+    </div>
+    <button type="button" class="btn-primary" id="btnMoverManual" style="margin-top:8px">Mover a la lámina elegida</button>
   `;
+  document.getElementById("btnDeseleccionar").addEventListener("click", () => {
+    editorPiezasSeleccionadas.clear();
+    renderLaminaEditor();
+    renderAccionesPieza();
+  });
   document.getElementById("btnBuscarDondeCabe").addEventListener("click", buscarDondeCabe);
+  document.getElementById("btnMoverManual").addEventListener("click", () => {
+    const destino = Number(document.getElementById("editorSelectManual").value);
+    moverPiezasA(destino);
+  });
 }
 
 async function buscarDondeCabe() {
@@ -770,7 +798,7 @@ async function buscarDondeCabe() {
       body: JSON.stringify({
         sheets: sheets.map((s) => ({ numero: s.numero, piezas: s.piezas })),
         sheetOrigen: sheets[editorSheetIndex].numero,
-        piezaIndex: editorPiezaSeleccionada,
+        piezaIndices: [...editorPiezasSeleccionadas],
         anchoVeta: editorDatos.tamanoUtil.anchoVeta,
         alto: editorDatos.tamanoUtil.alto,
       }),
@@ -778,7 +806,7 @@ async function buscarDondeCabe() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Error al buscar");
     if (!data.candidatos || !data.candidatos.length) {
-      contCand.innerHTML = '<div class="empty">No hay otra lámina con espacio para esta pieza.</div>';
+      contCand.innerHTML = '<div class="empty">No hay otra lámina con espacio para estas piezas juntas. Prueba moverlas de a una, o elige una lámina a mano abajo.</div>';
       return;
     }
     contCand.innerHTML = data.candidatos.map((c) => `
@@ -788,31 +816,32 @@ async function buscarDondeCabe() {
       </div>
     `).join("");
     contCand.querySelectorAll("[data-destino]").forEach((btn) => {
-      btn.addEventListener("click", () => moverPiezaA(Number(btn.dataset.destino)));
+      btn.addEventListener("click", () => moverPiezasA(Number(btn.dataset.destino)));
     });
   } catch (e) {
     contCand.innerHTML = '<div class="empty">Error al buscar espacio.</div>';
   }
 }
 
-async function moverPiezaA(destinoNumero) {
+async function moverPiezasA(destinoNumero) {
   const material = editorMaterialActual;
   const sheets = editorDatos.resultadoEmpaque[material].sheets;
   const origenNumero = sheets[editorSheetIndex].numero;
+  if (destinoNumero === origenNumero) { mostrarToast("Elige una lámina distinta a la actual", true); return; }
   try {
     const res = await fetch(API_BASE + "/api/mover-pieza", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sheets: sheets.map((s) => ({ numero: s.numero, piezas: s.piezas })),
         sheetOrigen: origenNumero,
-        piezaIndex: editorPiezaSeleccionada,
+        piezaIndices: [...editorPiezasSeleccionadas],
         sheetDestino: destinoNumero,
         anchoVeta: editorDatos.tamanoUtil.anchoVeta,
         alto: editorDatos.tamanoUtil.alto,
       }),
     });
     const data = await res.json();
-    if (!data.ok) { mostrarToast(data.error || "No se pudo mover la pieza", true); return; }
+    if (!data.ok) { mostrarToast(data.error || "No se pudo mover las piezas", true); return; }
 
     const r = editorDatos.resultadoEmpaque[material];
     r.sheets = data.sheets;
@@ -820,14 +849,14 @@ async function moverPiezaA(destinoNumero) {
     r.areaUsadaMM2 = data.sheets.reduce((sum, s) => sum + s.piezas.reduce((s2, p) => s2 + p.dx * p.dy, 0), 0);
     r.porcentajeUso = r.sheets.length ? (r.areaUsadaMM2 / (r.areaLaminaMM2 * r.sheets.length)) * 100 : 0;
 
-    editorPiezaSeleccionada = null;
+    editorPiezasSeleccionadas.clear();
     editorSheetIndex = Math.min(editorSheetIndex, r.sheets.length - 1);
     renderTabsEditor();
     renderLaminaEditor();
     renderAccionesPieza();
-    mostrarToast("Pieza movida ✓");
+    mostrarToast("Pieza(s) movida(s) ✓");
   } catch (e) {
-    mostrarToast("Error al mover la pieza", true);
+    mostrarToast("Error al mover las piezas", true);
   }
 }
 
