@@ -46,19 +46,76 @@ function dividirLibre_(libre, pw, ph) {
   return resultado;
 }
 
-// Elimina rectangulos libres que quedan completamente contenidos dentro de
-// otro (serian redundantes y solo hacen mas lenta la busqueda siguiente).
-function podarLibres_(libres) {
-  const contenido = (a, b) =>
-    a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
-  return libres.filter((a, i) => {
-    for (let j = 0; j < libres.length; j++) {
-      if (i === j) continue;
-      const b = libres[j];
-      if (contenido(a, b) && !(contenido(b, a) && j < i)) return false;
+// Vuelve a armar la lista de rectangulos libres uniendo los que, aunque se
+// hayan guardado por separado durante los cortes sucesivos, en realidad
+// forman una sola zona libre continua. Esto pasa seguido cuando se apilan
+// piezas de ancho parecido pero distinto (por ejemplo varias tiras de 2392,
+// 1659, 1344 y 924mm una debajo de otra): cada una deja un sobrante angosto
+// a su derecha, pero esos sobrantes -aunque separados en la lista- se tocan
+// entre si y forman un solo tramo mas ancho mas abajo. Sin esta union, el
+// algoritmo puede rechazar piezas que en realidad si caben.
+//
+// La union se hace por franjas horizontales (barrido en Y): en cada franja
+// se juntan los tramos libres en X que se tocan, y despues se pegan las
+// franjas contiguas que resultan con el mismo tramo en X. El resultado
+// sigue siendo 100% cortable de guillotina, porque cualquier rectangulo
+// libre asi armado se puede obtener con un corte horizontal de lado a lado
+// seguido de un corte vertical de lado a lado dentro de esa franja.
+function fusionarLibres_(libres) {
+  if (libres.length <= 1) return libres;
+
+  const ys = new Set();
+  libres.forEach((l) => { ys.add(l.y); ys.add(l.y + l.h); });
+  const yOrdenados = [...ys].sort((a, b) => a - b);
+
+  const franjas = [];
+  for (let i = 0; i < yOrdenados.length - 1; i++) {
+    const y0 = yOrdenados[i];
+    const y1 = yOrdenados[i + 1];
+    if (y1 <= y0) continue;
+    const tramosX = libres
+      .filter((l) => l.y <= y0 && l.y + l.h >= y1)
+      .map((l) => ({ x: l.x, w: l.w }))
+      .sort((a, b) => a.x - b.x);
+
+    const fusionadosX = [];
+    tramosX.forEach((t) => {
+      const ultimo = fusionadosX[fusionadosX.length - 1];
+      if (ultimo && t.x <= ultimo.x + ultimo.w) {
+        ultimo.w = Math.max(ultimo.w, t.x + t.w - ultimo.x);
+      } else {
+        fusionadosX.push({ ...t });
+      }
+    });
+    fusionadosX.forEach((t) => franjas.push({ x: t.x, y: y0, w: t.w, h: y1 - y0 }));
+  }
+
+  // Pegar franjas verticalmente contiguas que compartan exactamente el mismo
+  // tramo en X, para no dejar el resultado innecesariamente picado.
+  let cambiado = true;
+  while (cambiado) {
+    cambiado = false;
+    for (let i = 0; i < franjas.length && !cambiado; i++) {
+      for (let j = i + 1; j < franjas.length; j++) {
+        const a = franjas[i];
+        const b = franjas[j];
+        if (a.x === b.x && a.w === b.w && a.y + a.h === b.y) {
+          franjas[i] = { x: a.x, y: a.y, w: a.w, h: a.h + b.h };
+          franjas.splice(j, 1);
+          cambiado = true;
+          break;
+        }
+        if (a.x === b.x && a.w === b.w && b.y + b.h === a.y) {
+          franjas[i] = { x: b.x, y: b.y, w: a.w, h: a.h + b.h };
+          franjas.splice(j, 1);
+          cambiado = true;
+          break;
+        }
+      }
     }
-    return true;
-  });
+  }
+
+  return franjas;
 }
 
 // Puntaje "Best Short Side Fit": el lado sobrante mas chico entre el hueco y
@@ -134,7 +191,7 @@ function compactar_(sheets) {
         const libreDestino = mejor.sheet.libres[mejor.libreIdx];
         const nuevosLibres = dividirLibre_(libreDestino, mejor.orientacion.dx, mejor.orientacion.dy);
         mejor.sheet.libres.splice(mejor.libreIdx, 1, ...nuevosLibres);
-        mejor.sheet.libres = podarLibres_(mejor.sheet.libres);
+        mejor.sheet.libres = fusionarLibres_(mejor.sheet.libres);
 
         nuevasUbicaciones.push({
           sheet: mejor.sheet,
@@ -197,7 +254,7 @@ function reempacarLamina(piezas, sheetW, sheetH) {
     });
     const nuevosLibres = dividirLibre_(libreDestino, mejor.orientacion.dx, mejor.orientacion.dy);
     sheet.libres.splice(mejor.libreIdx, 1, ...nuevosLibres);
-    sheet.libres = podarLibres_(sheet.libres);
+    sheet.libres = fusionarLibres_(sheet.libres);
   });
 
   return { piezas: sheet.piezas, noCaben, libres: sheet.libres };
@@ -238,7 +295,7 @@ function agregarAPiezas(piezasExistentes, piezasNuevas, sheetW, sheetH) {
     });
     const nuevosLibres = dividirLibre_(libreDestino, mejor.orientacion.dx, mejor.orientacion.dy);
     libres.splice(mejor.libreIdx, 1, ...nuevosLibres);
-    libres = podarLibres_(libres);
+    libres = fusionarLibres_(libres);
   });
 
   return { piezas: [...base.piezas, ...colocadas], colocadas, noCaben };
@@ -328,7 +385,7 @@ function empacar(piezas, tamano) {
 
       const nuevosLibres = dividirLibre_(libreDestino, orientacionElegida.dx, orientacionElegida.dy);
       sheetDestino.libres.splice(libreIdxDestino, 1, ...nuevosLibres);
-      sheetDestino.libres = podarLibres_(sheetDestino.libres);
+      sheetDestino.libres = fusionarLibres_(sheetDestino.libres);
     });
 
     compactar_(sheets);
