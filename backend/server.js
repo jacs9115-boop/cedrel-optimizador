@@ -263,17 +263,17 @@ app.get("/api/empacar", async (req, res) => {
   }
 });
 
-// Mueve una pieza de una lamina a otra dentro del editor manual. Para
-// garantizar que el resultado siga siendo cortable de guillotina y sin
-// solapamientos, no se intenta "encajar" la pieza en el hueco donde estaba;
-// en cambio se reacomodan desde cero tanto la lamina de origen (sin la
-// pieza) como la de destino (con la pieza agregada). Si la lamina de
-// destino no alcanza a acomodar todas sus piezas (incluida la nueva), el
-// movimiento se rechaza y no se cambia nada.
+// Mueve una o varias piezas de una lamina a otra dentro del editor manual.
+// Para garantizar que el resultado siga siendo cortable de guillotina y sin
+// solapamientos, no se intenta "encajar" las piezas en el hueco donde
+// estaban; en cambio se reacomodan desde cero tanto la lamina de origen (sin
+// esas piezas) como la de destino (con las piezas agregadas). Si la lamina
+// de destino no alcanza a acomodar todas sus piezas (incluidas las nuevas),
+// el movimiento se rechaza completo y no se cambia nada.
 app.post("/api/mover-pieza", (req, res) => {
   try {
-    const { sheets, sheetOrigen, piezaIndex, sheetDestino, anchoVeta, alto } = req.body;
-    if (!Array.isArray(sheets) || !anchoVeta || !alto) {
+    const { sheets, sheetOrigen, piezaIndices, sheetDestino, anchoVeta, alto } = req.body;
+    if (!Array.isArray(sheets) || !Array.isArray(piezaIndices) || !piezaIndices.length || !anchoVeta || !alto) {
       return res.status(400).json({ error: "Faltan datos" });
     }
     const origen = sheets.find((s) => s.numero === sheetOrigen);
@@ -281,17 +281,18 @@ app.post("/api/mover-pieza", (req, res) => {
     if (!origen || !destino) {
       return res.status(400).json({ error: "Lámina de origen o destino no encontrada" });
     }
-    const pieza = origen.piezas[piezaIndex];
-    if (!pieza) {
+    const indices = new Set(piezaIndices);
+    const piezasAMover = origen.piezas.filter((_, i) => indices.has(i));
+    if (piezasAMover.length !== piezaIndices.length) {
       return res.status(400).json({ error: "Pieza no encontrada" });
     }
 
-    const origenRestante = origen.piezas.filter((_, i) => i !== piezaIndex);
-    const destinoConNueva = [...destino.piezas, pieza];
+    const origenRestante = origen.piezas.filter((_, i) => !indices.has(i));
+    const destinoConNuevas = [...destino.piezas, ...piezasAMover];
 
-    const rDestino = reempacarLamina(destinoConNueva, anchoVeta, alto);
+    const rDestino = reempacarLamina(destinoConNuevas, anchoVeta, alto);
     if (rDestino.noCaben.length > 0) {
-      return res.json({ ok: false, error: "La pieza no cabe en esa lámina" });
+      return res.json({ ok: false, error: "Las piezas no caben en esa lámina" });
     }
     const rOrigen = reempacarLamina(origenRestante, anchoVeta, alto);
 
@@ -311,27 +312,33 @@ app.post("/api/mover-pieza", (req, res) => {
   }
 });
 
-// Dada una pieza de una lamina, busca en cuales OTRAS laminas del mismo
-// material cabria si se moviera para alla (reacomodando esa lamina desde
-// cero junto con la pieza nueva). Se usa para sugerirle al usuario a donde
-// mover una pieza, sin que tenga que ir probando lamina por lamina.
+// Dadas una o varias piezas de una lamina, busca en cuales OTRAS laminas del
+// mismo material cabrian TODAS juntas si se movieran para alla (reacomodando
+// esa lamina desde cero junto con las piezas nuevas). Se usa para sugerirle
+// al usuario a donde mover, sin que tenga que ir probando lamina por lamina;
+// el usuario tambien puede elegir cualquier otra lamina a mano (el endpoint
+// de mover-pieza valida igual si cabe o no).
 app.post("/api/donde-cabe", (req, res) => {
   try {
-    const { sheets, sheetOrigen, piezaIndex, anchoVeta, alto } = req.body;
-    if (!Array.isArray(sheets) || !anchoVeta || !alto) {
+    const { sheets, sheetOrigen, piezaIndices, anchoVeta, alto } = req.body;
+    if (!Array.isArray(sheets) || !Array.isArray(piezaIndices) || !piezaIndices.length || !anchoVeta || !alto) {
       return res.status(400).json({ error: "Faltan datos" });
     }
     const origen = sheets.find((s) => s.numero === sheetOrigen);
-    const pieza = origen && origen.piezas[piezaIndex];
-    if (!pieza) {
+    if (!origen) {
+      return res.status(400).json({ error: "Lámina no encontrada" });
+    }
+    const indices = new Set(piezaIndices);
+    const piezas = origen.piezas.filter((_, i) => indices.has(i));
+    if (piezas.length !== piezaIndices.length) {
       return res.status(400).json({ error: "Pieza no encontrada" });
     }
 
     const candidatos = [];
     sheets.forEach((s) => {
       if (s.numero === sheetOrigen) return;
-      const conNueva = [...s.piezas, pieza];
-      const r = reempacarLamina(conNueva, anchoVeta, alto);
+      const conNuevas = [...s.piezas, ...piezas];
+      const r = reempacarLamina(conNuevas, anchoVeta, alto);
       if (r.noCaben.length === 0) {
         const usoResultante = (r.piezas.reduce((sum, p) => sum + p.dx * p.dy, 0) / (anchoVeta * alto)) * 100;
         candidatos.push({ numero: s.numero, usoResultante });
