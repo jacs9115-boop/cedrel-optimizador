@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-const { empacar, calcularCantos, calcularCorte } = require("./nido");
+const { empacar, calcularCantos, calcularCorte, reempacarLamina } = require("./nido");
 const { generarPDF } = require("./pdfGenerator");
 
 const PORT = process.env.PORT || 3000;
@@ -10,7 +10,7 @@ const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "15mb" }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
 function requireAppsScriptUrl() {
@@ -167,6 +167,53 @@ app.get("/api/leer", async (req, res) => {
   }
 });
 
+async function calcularTodo(fileId, tamano) {
+  const [piezas, config] = await Promise.all([
+    llamarAppsScript(`${APPS_SCRIPT_URL}?leer=${encodeURIComponent(fileId)}`),
+    llamarAppsScript(`${APPS_SCRIPT_URL}?config=1`),
+  ]);
+
+  if (piezas && piezas.error) {
+    throw Object.assign(new Error(piezas.error), { status: 400 });
+  }
+  if (!Array.isArray(piezas) || piezas.length === 0) {
+    throw Object.assign(new Error("No se encontraron piezas validas en el archivo"), { status: 400 });
+  }
+
+  const tamanoObj = (config.tamanos || []).find((t) => t.nombre === tamano);
+  if (!tamanoObj) {
+    throw Object.assign(new Error("Tamaño de lámina no encontrado"), { status: 400 });
+  }
+
+  // Descuento de corte: al aserrar se pierde material en los bordes, asi
+  // que el area realmente aprovechable es menor que la lamina fisica. El
+  // margen es editable por tamaño desde Ajustes (por defecto 20mm).
+  const margen = tamanoObj.margen === undefined || tamanoObj.margen === null ? 20 : tamanoObj.margen;
+  const tamanoUtil = {
+    nombre: tamanoObj.nombre,
+    anchoVeta: tamanoObj.anchoVeta - margen,
+    alto: tamanoObj.alto - margen,
+    anchoNominal: tamanoObj.anchoVeta,
+    altoNominal: tamanoObj.alto,
+    margen,
+  };
+
+  const resultadoEmpaque = empacar(piezas, tamanoUtil);
+  const cantos = calcularCantos(piezas);
+  const corte = calcularCorte(piezas);
+
+  return {
+    resultadoEmpaque,
+    cantos,
+    corte,
+    tamanoUtil,
+    preciosMaterial: config.preciosMaterial || {},
+    preciosCanto: config.preciosCanto || { flexible: 0, rigido: 0 },
+    preciosCantoMaterial: config.preciosCantoMaterial || {},
+    preciosCorte: config.preciosCorte || {},
+  };
+}
+
 app.get("/api/procesar", async (req, res) => {
   try {
     requireAppsScriptUrl();
@@ -175,51 +222,146 @@ app.get("/api/procesar", async (req, res) => {
       return res.status(400).json({ error: "Falta fileId o tamano" });
     }
 
-    const [piezas, config] = await Promise.all([
-      llamarAppsScript(`${APPS_SCRIPT_URL}?leer=${encodeURIComponent(fileId)}`),
-      llamarAppsScript(`${APPS_SCRIPT_URL}?config=1`),
-    ]);
-
-    if (piezas && piezas.error) {
-      return res.status(400).json({ error: piezas.error });
-    }
-    if (!Array.isArray(piezas) || piezas.length === 0) {
-      return res.status(400).json({ error: "No se encontraron piezas validas en el archivo" });
-    }
-
-    const tamanoObj = (config.tamanos || []).find((t) => t.nombre === tamano);
-    if (!tamanoObj) {
-      return res.status(400).json({ error: "Tamaño de lámina no encontrado" });
-    }
-
-    // Descuento de corte: al aserrar se pierde material en los bordes, asi
-    // que el area realmente aprovechable es menor que la lamina fisica. El
-    // margen es editable por tamaño desde Ajustes (por defecto 20mm).
-    const margen = tamanoObj.margen === undefined || tamanoObj.margen === null ? 20 : tamanoObj.margen;
-    const tamanoUtil = {
-      nombre: tamanoObj.nombre,
-      anchoVeta: tamanoObj.anchoVeta - margen,
-      alto: tamanoObj.alto - margen,
-      anchoNominal: tamanoObj.anchoVeta,
-      altoNominal: tamanoObj.alto,
-      margen,
-    };
-
-    const resultadoEmpaque = empacar(piezas, tamanoUtil);
-    const cantos = calcularCantos(piezas);
-    const corte = calcularCorte(piezas);
+    const datos = await calcularTodo(fileId, tamano);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", "attachment; filename=optimizacion-cedrel.pdf");
     generarPDF(res, {
-      resultadoEmpaque,
-      tamano: tamanoUtil,
-      cantos,
-      corte,
-      preciosMaterial: config.preciosMaterial || {},
-      preciosCanto: config.preciosCanto || { flexible: 0, rigido: 0 },
-      preciosCantoMaterial: config.preciosCantoMaterial || {},
-      preciosCorte: config.preciosCorte || {},
+      resultadoEmpaque: datos.resultadoEmpaque,
+      tamano: datos.tamanoUtil,
+      cantos: datos.cantos,
+      corte: datos.corte,
+      preciosMaterial: datos.preciosMaterial,
+      preciosCanto: datos.preciosCanto,
+      preciosCantoMaterial: datos.preciosCantoMaterial,
+      preciosCorte: datos.preciosCorte,
+      logoPath: path.join(__dirname, "..", "frontend", "icons", "icon-512.png"),
+    });
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) {
+      res.status(err.status || 500).json({ error: err.message || "Error inesperado" });
+    }
+  }
+});
+
+// Igual que /api/procesar, pero devuelve el resultado en JSON en vez de un
+// PDF, para que el editor manual de distribucion pueda dibujar las laminas
+// de forma interactiva.
+app.get("/api/empacar", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const { fileId, tamano } = req.query;
+    if (!fileId || !tamano) {
+      return res.status(400).json({ error: "Falta fileId o tamano" });
+    }
+    const datos = await calcularTodo(fileId, tamano);
+    res.json(datos);
+  } catch (err) {
+    console.error(err);
+    res.status(err.status || 500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+// Mueve una pieza de una lamina a otra dentro del editor manual. Para
+// garantizar que el resultado siga siendo cortable de guillotina y sin
+// solapamientos, no se intenta "encajar" la pieza en el hueco donde estaba;
+// en cambio se reacomodan desde cero tanto la lamina de origen (sin la
+// pieza) como la de destino (con la pieza agregada). Si la lamina de
+// destino no alcanza a acomodar todas sus piezas (incluida la nueva), el
+// movimiento se rechaza y no se cambia nada.
+app.post("/api/mover-pieza", (req, res) => {
+  try {
+    const { sheets, sheetOrigen, piezaIndex, sheetDestino, anchoVeta, alto } = req.body;
+    if (!Array.isArray(sheets) || !anchoVeta || !alto) {
+      return res.status(400).json({ error: "Faltan datos" });
+    }
+    const origen = sheets.find((s) => s.numero === sheetOrigen);
+    const destino = sheets.find((s) => s.numero === sheetDestino);
+    if (!origen || !destino) {
+      return res.status(400).json({ error: "Lámina de origen o destino no encontrada" });
+    }
+    const pieza = origen.piezas[piezaIndex];
+    if (!pieza) {
+      return res.status(400).json({ error: "Pieza no encontrada" });
+    }
+
+    const origenRestante = origen.piezas.filter((_, i) => i !== piezaIndex);
+    const destinoConNueva = [...destino.piezas, pieza];
+
+    const rDestino = reempacarLamina(destinoConNueva, anchoVeta, alto);
+    if (rDestino.noCaben.length > 0) {
+      return res.json({ ok: false, error: "La pieza no cabe en esa lámina" });
+    }
+    const rOrigen = reempacarLamina(origenRestante, anchoVeta, alto);
+
+    let nuevasLaminas = sheets.map((s) => {
+      if (s.numero === sheetOrigen) return { numero: s.numero, piezas: rOrigen.piezas };
+      if (s.numero === sheetDestino) return { numero: s.numero, piezas: rDestino.piezas };
+      return s;
+    });
+    // Si la lamina de origen quedo vacia, se elimina y se renumeran las demas.
+    nuevasLaminas = nuevasLaminas.filter((s) => s.piezas.length > 0);
+    nuevasLaminas.forEach((s, i) => { s.numero = i + 1; });
+
+    res.json({ ok: true, sheets: nuevasLaminas });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+// Dada una pieza de una lamina, busca en cuales OTRAS laminas del mismo
+// material cabria si se moviera para alla (reacomodando esa lamina desde
+// cero junto con la pieza nueva). Se usa para sugerirle al usuario a donde
+// mover una pieza, sin que tenga que ir probando lamina por lamina.
+app.post("/api/donde-cabe", (req, res) => {
+  try {
+    const { sheets, sheetOrigen, piezaIndex, anchoVeta, alto } = req.body;
+    if (!Array.isArray(sheets) || !anchoVeta || !alto) {
+      return res.status(400).json({ error: "Faltan datos" });
+    }
+    const origen = sheets.find((s) => s.numero === sheetOrigen);
+    const pieza = origen && origen.piezas[piezaIndex];
+    if (!pieza) {
+      return res.status(400).json({ error: "Pieza no encontrada" });
+    }
+
+    const candidatos = [];
+    sheets.forEach((s) => {
+      if (s.numero === sheetOrigen) return;
+      const conNueva = [...s.piezas, pieza];
+      const r = reempacarLamina(conNueva, anchoVeta, alto);
+      if (r.noCaben.length === 0) {
+        const usoResultante = (r.piezas.reduce((sum, p) => sum + p.dx * p.dy, 0) / (anchoVeta * alto)) * 100;
+        candidatos.push({ numero: s.numero, usoResultante });
+      }
+    });
+    candidatos.sort((a, b) => b.usoResultante - a.usoResultante);
+
+    res.json({ candidatos });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+// Genera el PDF final a partir de una distribucion ya editada a mano (en
+// vez de recalcularla desde el despiece).
+app.post("/api/generar-pdf-editado", (req, res) => {
+  try {
+    const { resultadoEmpaque, tamano, cantos, corte, preciosMaterial, preciosCanto, preciosCantoMaterial, preciosCorte } = req.body;
+    if (!resultadoEmpaque || !tamano) {
+      return res.status(400).json({ error: "Faltan datos" });
+    }
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=optimizacion-cedrel.pdf");
+    generarPDF(res, {
+      resultadoEmpaque, tamano, cantos, corte,
+      preciosMaterial: preciosMaterial || {},
+      preciosCanto: preciosCanto || { flexible: 0, rigido: 0 },
+      preciosCantoMaterial: preciosCantoMaterial || {},
+      preciosCorte: preciosCorte || {},
       logoPath: path.join(__dirname, "..", "frontend", "icons", "icon-512.png"),
     });
   } catch (err) {

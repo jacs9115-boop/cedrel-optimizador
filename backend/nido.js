@@ -75,6 +75,134 @@ function mejorQue_(a, b) {
   return a.ladoLargo < b.ladoLargo;
 }
 
+function clonarLibres_(sheets) {
+  return sheets.map((s) => s.libres.map((l) => ({ ...l })));
+}
+
+function restaurarLibres_(sheets, snapshot) {
+  sheets.forEach((s, i) => { s.libres = snapshot[i]; });
+}
+
+// Despues de armar la distribucion inicial, algunas laminas quedan con mucho
+// espacio libre (por ejemplo la ultima lamina de cada tanda, que recibe las
+// piezas sobrantes). Esta funcion intenta VACIAR por completo las laminas
+// menos aprovechadas, moviendo todas sus piezas al espacio libre que haya
+// quedado en las demas laminas; si se logra mover TODA una lamina, esa
+// lamina se elimina de la lista (una lamina menos que comprar). Se procesa
+// siempre la lamina peor aprovechada primero, porque es la que mas
+// probablemente se pueda vaciar.
+function compactar_(sheets) {
+  let cambiado = true;
+  while (cambiado && sheets.length > 1) {
+    cambiado = false;
+
+    const ordenPorUso = sheets
+      .map((s, i) => ({ i, uso: s.piezas.reduce((sum, p) => sum + p.dx * p.dy, 0) }))
+      .sort((a, b) => a.uso - b.uso)
+      .map((x) => x.i);
+
+    for (const idx of ordenPorUso) {
+      const candidata = sheets[idx];
+      if (!candidata || candidata.piezas.length === 0) continue;
+
+      const otras = sheets.filter((_, i) => i !== idx);
+      const snapshot = clonarLibres_(otras);
+      const piezasOrdenadas = [...candidata.piezas].sort((a, b) => b.dx * b.dy - a.dx * a.dy);
+      const nuevasUbicaciones = [];
+      let exito = true;
+
+      for (const pieza of piezasOrdenadas) {
+        const orientaciones = pieza.veta === "no"
+          ? [{ dx: pieza.dx, dy: pieza.dy }, { dx: pieza.dy, dy: pieza.dx }]
+          : [{ dx: pieza.dx, dy: pieza.dy }];
+
+        let mejor = null;
+        otras.forEach((sheet) => {
+          sheet.libres.forEach((libre, libreIdx) => {
+            orientaciones.forEach((o) => {
+              if (o.dx > libre.w || o.dy > libre.h) return;
+              const puntaje = puntajeAjuste_(libre, o);
+              if (mejorQue_(puntaje, mejor && mejor.puntaje)) {
+                mejor = { sheet, libreIdx, orientacion: o, puntaje };
+              }
+            });
+          });
+        });
+
+        if (!mejor) { exito = false; break; }
+
+        const libreDestino = mejor.sheet.libres[mejor.libreIdx];
+        const nuevosLibres = dividirLibre_(libreDestino, mejor.orientacion.dx, mejor.orientacion.dy);
+        mejor.sheet.libres.splice(mejor.libreIdx, 1, ...nuevosLibres);
+        mejor.sheet.libres = podarLibres_(mejor.sheet.libres);
+
+        nuevasUbicaciones.push({
+          sheet: mejor.sheet,
+          pieza: {
+            ...pieza, x: libreDestino.x, y: libreDestino.y,
+            dx: mejor.orientacion.dx, dy: mejor.orientacion.dy,
+          },
+        });
+      }
+
+      if (exito) {
+        nuevasUbicaciones.forEach(({ sheet, pieza }) => sheet.piezas.push(pieza));
+        sheets.splice(idx, 1);
+        cambiado = true;
+        break;
+      } else {
+        restaurarLibres_(otras, snapshot);
+      }
+    }
+  }
+
+  sheets.forEach((s, i) => { s.numero = i + 1; });
+  return sheets;
+}
+
+// Vuelve a acomodar, desde cero, una lista de piezas en UNA sola lamina
+// vacia. Se usa para mover piezas entre laminas en el editor manual: en vez
+// de tratar de "agujerear" el hueco donde estaba la pieza (delicado de hacer
+// bien con cortes de guillotina), simplemente se re-arma la lamina de origen
+// (con la pieza movida afuera) y la lamina de destino (con la pieza movida
+// adentro) cada una desde cero. Devuelve tambien las piezas que no
+// alcanzaron a caber, para que quien llama pueda decidir que hacer.
+function reempacarLamina(piezas, sheetW, sheetH) {
+  const sheet = { numero: 1, piezas: [], libres: [{ x: 0, y: 0, w: sheetW, h: sheetH }] };
+  const noCaben = [];
+
+  const ordenadas = [...piezas].sort((a, b) => (b.largo * b.ancho) - (a.largo * a.ancho));
+
+  ordenadas.forEach((p) => {
+    const orientaciones = orientacionesPosibles_(p).filter((o) => o.dx <= sheetW && o.dy <= sheetH);
+    if (orientaciones.length === 0) { noCaben.push(p); return; }
+
+    let mejor = null;
+    sheet.libres.forEach((libre, libreIdx) => {
+      orientaciones.forEach((o) => {
+        if (o.dx > libre.w || o.dy > libre.h) return;
+        const puntaje = puntajeAjuste_(libre, o);
+        if (mejorQue_(puntaje, mejor && mejor.puntaje)) {
+          mejor = { libreIdx, orientacion: o, puntaje };
+        }
+      });
+    });
+
+    if (!mejor) { noCaben.push(p); return; }
+
+    const libreDestino = sheet.libres[mejor.libreIdx];
+    sheet.piezas.push({
+      x: libreDestino.x, y: libreDestino.y, dx: mejor.orientacion.dx, dy: mejor.orientacion.dy,
+      descripcion: p.descripcion, largo: p.largo, ancho: p.ancho, veta: p.veta,
+    });
+    const nuevosLibres = dividirLibre_(libreDestino, mejor.orientacion.dx, mejor.orientacion.dy);
+    sheet.libres.splice(mejor.libreIdx, 1, ...nuevosLibres);
+    sheet.libres = podarLibres_(sheet.libres);
+  });
+
+  return { piezas: sheet.piezas, noCaben };
+}
+
 function empacar(piezas, tamano) {
   const sheetW = tamano.anchoVeta;
   const sheetH = tamano.alto;
@@ -162,6 +290,8 @@ function empacar(piezas, tamano) {
       sheetDestino.libres = podarLibres_(sheetDestino.libres);
     });
 
+    compactar_(sheets);
+
     const areaLaminaMM2 = sheetW * sheetH;
     const areaUsadaMM2 = sheets.reduce(
       (sum, s) => sum + s.piezas.reduce((s2, p) => s2 + p.dx * p.dy, 0), 0
@@ -228,4 +358,4 @@ function calcularCorte(piezas) {
   return porMaterial;
 }
 
-module.exports = { empacar, calcularCantos, calcularCorte, extraerEspesorMM_ };
+module.exports = { empacar, calcularCantos, calcularCorte, extraerEspesorMM_, reempacarLamina };
