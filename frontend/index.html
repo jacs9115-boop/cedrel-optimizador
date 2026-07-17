@@ -95,6 +95,40 @@
   .mini-form input { flex: 1; }
   .mini-form button { padding: 0 16px; border: none; border-radius: 10px; background: var(--accent);
     color: #fff; font-weight: 700; }
+
+  .vista-editor { position: fixed; inset: 0; background: var(--bg); z-index: 40;
+    display: none; flex-direction: column; }
+  .vista-editor.open { display: flex; }
+  .editor-header { background: var(--brand); color: #fff;
+    padding: calc(12px + env(safe-area-inset-top)) 16px 12px; display: flex; align-items: center;
+    justify-content: space-between; font-weight: 700; font-size: 15px; flex-shrink: 0; }
+  .editor-header button { background: none; border: none; color: #fff; font-size: 22px; padding: 4px 8px; }
+  .editor-tabs { display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto; flex-shrink: 0;
+    border-bottom: 1px solid var(--border); }
+  .editor-tab { flex-shrink: 0; padding: 8px 12px; border-radius: 100px; border: 1px solid var(--border);
+    background: var(--card); color: var(--muted); font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .editor-tab.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+  .editor-nav { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px;
+    flex-shrink: 0; }
+  .editor-nav button { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    width: 38px; height: 38px; font-size: 16px; color: var(--text); flex-shrink: 0; }
+  .editor-nav button:disabled { opacity: 0.3; }
+  .editor-nav-info { font-size: 13px; font-weight: 600; text-align: center; flex: 1; }
+  .editor-canvas-wrap { padding: 0 16px 10px; overflow: auto; flex: 1; min-height: 0; }
+  .editor-canvas { position: relative; background: var(--card); border: 2px solid var(--text);
+    border-radius: 4px; margin: 0 auto; }
+  .pieza-editor { position: absolute; border: 1px solid var(--muted); background: rgba(192,138,78,0.1);
+    font-size: 9px; line-height: 1.2; color: var(--muted); overflow: hidden; padding: 2px;
+    box-sizing: border-box; cursor: pointer; }
+  .pieza-editor.seleccionada { background: rgba(192,138,78,0.45); border: 2px solid var(--accent);
+    color: var(--text); font-weight: 700; }
+  .editor-acciones { padding: 10px 16px; border-top: 1px solid var(--border); flex-shrink: 0;
+    max-height: 40vh; overflow-y: auto; }
+  .editor-pieza-info { font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
+  .editor-footer { padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border); flex-shrink: 0; }
+  .mini-btn-mover { padding: 7px 14px; border: none; border-radius: 8px; background: var(--accent);
+    color: #fff; font-weight: 700; font-size: 12.5px; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -129,9 +163,30 @@
     <div id="materialesBadges"></div>
     <div class="status" id="statusMateriales" style="margin-top:10px"></div>
     <button type="button" class="btn-primary" id="btnGenerarPDF">Generar PDF</button>
+    <button type="button" class="btn-secondary" id="btnAbrirEditor">Revisar y ajustar distribución</button>
     <button type="button" class="btn-secondary" id="btnAbrirPrecios">Ajustar precios antes de generar</button>
   </div>
 </main>
+
+<div class="vista-editor" id="vistaEditor">
+  <div class="editor-header">
+    <span>Editor de distribución</span>
+    <button type="button" id="btnCerrarEditor" aria-label="Cerrar">✕</button>
+  </div>
+  <div class="editor-tabs" id="editorTabs"></div>
+  <div class="editor-nav">
+    <button type="button" id="editorPrev">‹</button>
+    <div class="editor-nav-info" id="editorLaminaInfo"></div>
+    <button type="button" id="editorNext">›</button>
+  </div>
+  <div class="editor-canvas-wrap">
+    <div class="editor-canvas" id="editorCanvas"></div>
+  </div>
+  <div class="editor-acciones" id="editorAcciones"></div>
+  <div class="editor-footer">
+    <button type="button" class="btn-primary" id="btnGenerarPDFEditor">Generar PDF con estos cambios</button>
+  </div>
+</div>
 
 <div class="sheet-overlay" id="overlayAjustes"></div>
 <div class="sheet" id="sheetAjustes">
@@ -530,6 +585,31 @@ document.getElementById("btnAbrirPrecios").addEventListener("click", () => {
   renderPreciosCorte();
 });
 
+async function compartirOGuardarPDF(blob) {
+  const nombreArchivo = "optimizacion-cedrel.pdf";
+  const file = new File([blob], nombreArchivo, { type: "application/pdf" });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: "Optimización de Cortes - Cedrel" });
+    } else {
+      throw new Error("share-no-soportado");
+    }
+  } catch (shareErr) {
+    if (shareErr && shareErr.name === "AbortError") {
+      // el usuario cerró el menú de compartir, no hacer nada mas
+    } else {
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = nombreArchivo;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+    }
+  }
+}
+
 document.getElementById("btnGenerarPDF").addEventListener("click", async () => {
   const tamano = document.getElementById("selectTamano").value;
   const url = `${API_BASE}/api/procesar?fileId=${encodeURIComponent(archivoSeleccionadoId)}&tamano=${encodeURIComponent(tamano)}`;
@@ -544,28 +624,238 @@ document.getElementById("btnGenerarPDF").addEventListener("click", async () => {
       throw new Error(data.error || "Error al generar el PDF");
     }
     const blob = await res.blob();
-    const nombreArchivo = "optimizacion-cedrel.pdf";
-    const file = new File([blob], nombreArchivo, { type: "application/pdf" });
-    try {
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: "Optimización de Cortes - Cedrel" });
-      } else {
-        throw new Error("share-no-soportado");
-      }
-    } catch (shareErr) {
-      if (shareErr && shareErr.name === "AbortError") {
-        // el usuario cerró el menú de compartir, no hacer nada mas
-      } else {
-        const blobUrl = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = blobUrl;
-        a.download = nombreArchivo;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
-      }
+    await compartirOGuardarPDF(blob);
+  } catch (err) {
+    mostrarToast("Error: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+  }
+});
+
+// ---------- Editor de distribución ----------
+let editorDatos = null;
+let editorMaterialActual = null;
+let editorSheetIndex = 0;
+let editorPiezaSeleccionada = null;
+
+const vistaEditor = document.getElementById("vistaEditor");
+
+document.getElementById("btnAbrirEditor").addEventListener("click", abrirEditor);
+document.getElementById("btnCerrarEditor").addEventListener("click", () => {
+  vistaEditor.classList.remove("open");
+});
+
+async function abrirEditor() {
+  const tamano = document.getElementById("selectTamano").value;
+  vistaEditor.classList.add("open");
+  document.getElementById("editorTabs").innerHTML = "";
+  document.getElementById("editorLaminaInfo").textContent = "";
+  document.getElementById("editorAcciones").innerHTML = "";
+  document.getElementById("editorCanvas").innerHTML = '<div class="empty"><span class="spinner"></span> Calculando distribución...</div>';
+  try {
+    const res = await fetch(`${API_BASE}/api/empacar?fileId=${encodeURIComponent(archivoSeleccionadoId)}&tamano=${encodeURIComponent(tamano)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Error al calcular la distribución");
+    editorDatos = data;
+    editorMaterialActual = Object.keys(data.resultadoEmpaque)[0];
+    editorSheetIndex = 0;
+    editorPiezaSeleccionada = null;
+    renderTabsEditor();
+    renderLaminaEditor();
+    renderAccionesPieza();
+  } catch (err) {
+    document.getElementById("editorCanvas").innerHTML = `<div class="empty">Error: ${err.message}</div>`;
+  }
+}
+
+function renderTabsEditor() {
+  const cont = document.getElementById("editorTabs");
+  const materiales = Object.keys(editorDatos.resultadoEmpaque);
+  cont.innerHTML = materiales.map((m) => {
+    const r = editorDatos.resultadoEmpaque[m];
+    return `<button type="button" class="editor-tab ${m === editorMaterialActual ? "active" : ""}" data-material="${m}">${m} (${r.sheetsUsadas})</button>`;
+  }).join("");
+  cont.querySelectorAll("[data-material]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      editorMaterialActual = btn.dataset.material;
+      editorSheetIndex = 0;
+      editorPiezaSeleccionada = null;
+      renderTabsEditor();
+      renderLaminaEditor();
+      renderAccionesPieza();
+    });
+  });
+}
+
+document.getElementById("editorPrev").addEventListener("click", () => {
+  if (editorSheetIndex > 0) {
+    editorSheetIndex--;
+    editorPiezaSeleccionada = null;
+    renderLaminaEditor();
+    renderAccionesPieza();
+  }
+});
+document.getElementById("editorNext").addEventListener("click", () => {
+  const sheets = editorDatos.resultadoEmpaque[editorMaterialActual].sheets;
+  if (editorSheetIndex < sheets.length - 1) {
+    editorSheetIndex++;
+    editorPiezaSeleccionada = null;
+    renderLaminaEditor();
+    renderAccionesPieza();
+  }
+});
+
+function renderLaminaEditor() {
+  const sheets = editorDatos.resultadoEmpaque[editorMaterialActual].sheets;
+  if (editorSheetIndex >= sheets.length) editorSheetIndex = Math.max(0, sheets.length - 1);
+  const sheet = sheets[editorSheetIndex];
+  const sheetW = editorDatos.tamanoUtil.anchoVeta;
+  const sheetH = editorDatos.tamanoUtil.alto;
+  const areaUsada = sheet.piezas.reduce((s, p) => s + p.dx * p.dy, 0);
+  const uso = (areaUsada / (sheetW * sheetH)) * 100;
+
+  document.getElementById("editorLaminaInfo").textContent =
+    `${editorMaterialActual} — Lámina ${sheet.numero} de ${sheets.length} — uso ${uso.toFixed(1)}%`;
+
+  const cont = document.getElementById("editorCanvas");
+  const contW = cont.parentElement.clientWidth - 32 || 300;
+  const scale = contW / sheetW;
+  cont.style.width = Math.round(sheetW * scale) + "px";
+  cont.style.height = Math.round(sheetH * scale) + "px";
+
+  cont.innerHTML = sheet.piezas.map((p, i) => {
+    const seleccionada = i === editorPiezaSeleccionada;
+    return `<div class="pieza-editor ${seleccionada ? "seleccionada" : ""}" data-idx="${i}"
+      style="left:${Math.round(p.x * scale)}px; top:${Math.round(p.y * scale)}px; width:${Math.round(p.dx * scale)}px; height:${Math.round(p.dy * scale)}px;"
+      >${Math.round(p.largo)}x${Math.round(p.ancho)}</div>`;
+  }).join("");
+
+  cont.querySelectorAll(".pieza-editor").forEach((el) => {
+    el.addEventListener("click", () => {
+      const idx = Number(el.dataset.idx);
+      editorPiezaSeleccionada = editorPiezaSeleccionada === idx ? null : idx;
+      renderLaminaEditor();
+      renderAccionesPieza();
+    });
+  });
+
+  document.getElementById("editorPrev").disabled = editorSheetIndex === 0;
+  document.getElementById("editorNext").disabled = editorSheetIndex >= sheets.length - 1;
+}
+
+function renderAccionesPieza() {
+  const cont = document.getElementById("editorAcciones");
+  if (editorPiezaSeleccionada === null) {
+    cont.innerHTML = '<div class="empty" style="padding:8px">Toca una pieza en la lámina para moverla a otra.</div>';
+    return;
+  }
+  const sheets = editorDatos.resultadoEmpaque[editorMaterialActual].sheets;
+  const pieza = sheets[editorSheetIndex].piezas[editorPiezaSeleccionada];
+  cont.innerHTML = `
+    <div class="editor-pieza-info">Pieza seleccionada: ${Math.round(pieza.largo)} x ${Math.round(pieza.ancho)} mm</div>
+    <button type="button" class="btn-primary" id="btnBuscarDondeCabe" style="margin-top:0">Buscar dónde cabe</button>
+    <div id="editorCandidatos"></div>
+  `;
+  document.getElementById("btnBuscarDondeCabe").addEventListener("click", buscarDondeCabe);
+}
+
+async function buscarDondeCabe() {
+  const contCand = document.getElementById("editorCandidatos");
+  contCand.innerHTML = '<div class="status"><span class="spinner"></span> Buscando espacio...</div>';
+  const sheets = editorDatos.resultadoEmpaque[editorMaterialActual].sheets;
+  try {
+    const res = await fetch(API_BASE + "/api/donde-cabe", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sheets: sheets.map((s) => ({ numero: s.numero, piezas: s.piezas })),
+        sheetOrigen: sheets[editorSheetIndex].numero,
+        piezaIndex: editorPiezaSeleccionada,
+        anchoVeta: editorDatos.tamanoUtil.anchoVeta,
+        alto: editorDatos.tamanoUtil.alto,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Error al buscar");
+    if (!data.candidatos || !data.candidatos.length) {
+      contCand.innerHTML = '<div class="empty">No hay otra lámina con espacio para esta pieza.</div>';
+      return;
     }
+    contCand.innerHTML = data.candidatos.map((c) => `
+      <div class="fila-config">
+        <span class="nombre">Lámina ${c.numero} <span style="color:var(--muted);font-size:12px">(quedaría ${c.usoResultante.toFixed(1)}% de uso)</span></span>
+        <button type="button" class="mini-btn-mover" data-destino="${c.numero}">Mover aquí</button>
+      </div>
+    `).join("");
+    contCand.querySelectorAll("[data-destino]").forEach((btn) => {
+      btn.addEventListener("click", () => moverPiezaA(Number(btn.dataset.destino)));
+    });
+  } catch (e) {
+    contCand.innerHTML = '<div class="empty">Error al buscar espacio.</div>';
+  }
+}
+
+async function moverPiezaA(destinoNumero) {
+  const material = editorMaterialActual;
+  const sheets = editorDatos.resultadoEmpaque[material].sheets;
+  const origenNumero = sheets[editorSheetIndex].numero;
+  try {
+    const res = await fetch(API_BASE + "/api/mover-pieza", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sheets: sheets.map((s) => ({ numero: s.numero, piezas: s.piezas })),
+        sheetOrigen: origenNumero,
+        piezaIndex: editorPiezaSeleccionada,
+        sheetDestino: destinoNumero,
+        anchoVeta: editorDatos.tamanoUtil.anchoVeta,
+        alto: editorDatos.tamanoUtil.alto,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) { mostrarToast(data.error || "No se pudo mover la pieza", true); return; }
+
+    const r = editorDatos.resultadoEmpaque[material];
+    r.sheets = data.sheets;
+    r.sheetsUsadas = data.sheets.length;
+    r.areaUsadaMM2 = data.sheets.reduce((sum, s) => sum + s.piezas.reduce((s2, p) => s2 + p.dx * p.dy, 0), 0);
+    r.porcentajeUso = r.sheets.length ? (r.areaUsadaMM2 / (r.areaLaminaMM2 * r.sheets.length)) * 100 : 0;
+
+    editorPiezaSeleccionada = null;
+    editorSheetIndex = Math.min(editorSheetIndex, r.sheets.length - 1);
+    renderTabsEditor();
+    renderLaminaEditor();
+    renderAccionesPieza();
+    mostrarToast("Pieza movida ✓");
+  } catch (e) {
+    mostrarToast("Error al mover la pieza", true);
+  }
+}
+
+document.getElementById("btnGenerarPDFEditor").addEventListener("click", async () => {
+  const btn = document.getElementById("btnGenerarPDFEditor");
+  const textoOriginal = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Generando PDF...";
+  try {
+    const res = await fetch(API_BASE + "/api/generar-pdf-editado", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        resultadoEmpaque: editorDatos.resultadoEmpaque,
+        tamano: editorDatos.tamanoUtil,
+        cantos: editorDatos.cantos,
+        corte: editorDatos.corte,
+        preciosMaterial: editorDatos.preciosMaterial,
+        preciosCanto: editorDatos.preciosCanto,
+        preciosCantoMaterial: editorDatos.preciosCantoMaterial,
+        preciosCorte: editorDatos.preciosCorte,
+      }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || "Error al generar el PDF");
+    }
+    const blob = await res.blob();
+    await compartirOGuardarPDF(blob);
   } catch (err) {
     mostrarToast("Error: " + err.message, true);
   } finally {
