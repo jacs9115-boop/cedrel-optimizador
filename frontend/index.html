@@ -806,15 +806,18 @@ async function buscarDondeCabe() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Error al buscar");
     if (!data.candidatos || !data.candidatos.length) {
-      contCand.innerHTML = '<div class="empty">No hay otra lámina con espacio para estas piezas juntas. Prueba moverlas de a una, o elige una lámina a mano abajo.</div>';
+      contCand.innerHTML = '<div class="empty">No hay otra lámina con espacio para ninguna de estas piezas. Elige una lámina a mano abajo si quieres revisar de todos modos.</div>';
       return;
     }
-    contCand.innerHTML = data.candidatos.map((c) => `
+    contCand.innerHTML = data.candidatos.map((c) => {
+      const parcial = c.caben < c.totalSeleccionadas;
+      const etiquetaCaben = parcial ? `caben ${c.caben} de ${c.totalSeleccionadas}` : "caben todas";
+      return `
       <div class="fila-config">
-        <span class="nombre">Lámina ${c.numero} <span style="color:var(--muted);font-size:12px">(quedaría ${c.usoResultante.toFixed(1)}% de uso)</span></span>
+        <span class="nombre">Lámina ${c.numero} <span style="color:var(--muted);font-size:12px">(${etiquetaCaben}, quedaría ${c.usoResultante.toFixed(1)}% de uso)</span></span>
         <button type="button" class="mini-btn-mover" data-destino="${c.numero}">Mover aquí</button>
-      </div>
-    `).join("");
+      </div>`;
+    }).join("");
     contCand.querySelectorAll("[data-destino]").forEach((btn) => {
       btn.addEventListener("click", () => moverPiezasA(Number(btn.dataset.destino)));
     });
@@ -854,7 +857,11 @@ async function moverPiezasA(destinoNumero) {
     renderTabsEditor();
     renderLaminaEditor();
     renderAccionesPieza();
-    mostrarToast("Pieza(s) movida(s) ✓");
+    if (data.movidas < data.totalSeleccionadas) {
+      mostrarToast(`Se movieron ${data.movidas} de ${data.totalSeleccionadas} piezas. Las demás no cupieron y quedaron en la lámina de origen.`);
+    } else {
+      mostrarToast("Pieza(s) movida(s) ✓");
+    }
   } catch (e) {
     mostrarToast("Error al mover las piezas", true);
   }
